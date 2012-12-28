@@ -1,0 +1,419 @@
+
+/* Author: Chandrakanth Chereddi. cchered2@uiuc.edu */
+
+#include <linux/skbuff.h>
+#include <linux/netdevice.h>
+#include <linux/etherdevice.h>
+#include <linux/pkt_sched.h>
+#include <linux/spinlock.h>
+#include <linux/slab.h>
+#include <linux/timer.h>
+#include <linux/ip.h>
+#include <linux/udp.h>
+#include <linux/in.h>
+#include <linux/ipv6.h>
+#include <linux/if_arp.h>
+#include <linux/if_ether.h>
+#include <linux/if_bonding.h>
+#include <linux/if_vlan.h>
+#include <linux/netdevice.h>
+#include <linux/init.h>
+#include <linux/wireless.h>
+#include <linux/time.h>
+#include <net/ipx.h>
+#include <net/iw_handler.h>
+#include <asm/byteorder.h>
+#include <net/dst.h>
+#include <linux/types.h>
+#include "bonding.h"
+#include "bond_bmc.h"
+
+#define dd2printk(fmt, args...) \
+	printk(KERN_DEBUG     \
+			DRV_NAME ": %s() %d: " fmt, __FUNCTION__, __LINE__ , ## args )
+
+#define NIPQUAD(ipv4addr) \
+	((unsigned char *)&ipv4addr)[0], ((unsigned char *)&ipv4addr)[1], \
+	((unsigned char *)&ipv4addr)[2], ((unsigned char *)&ipv4addr)[3]
+
+#if 0
+#define d2printk(format , args...)  printk(DRV_NAME ": %s(): " format , __FUNCTION__, ## args)
+#endif
+
+extern int max_bonds;	/* Set to 1, BMC mode is restricted to one interface */
+int max_bonds_orig;	/* To set back when we deinit, this may be unncessary though! */
+
+/*
+ * Return the driver handler associated with a specific Wireless Extension.
+ * Called from various place, so make sure it remains efficient.
+ */
+static inline iw_handler get_handler(struct net_device *dev,
+				     unsigned int cmd)
+{
+	/* Don't "optimise" the following variable, it will crash */
+	unsigned int	index;		/* *MUST* be unsigned */
+
+	/* Check if we have some wireless handlers defined */
+	if(dev->wireless_handlers == NULL)
+		return NULL;
+
+	/* Try as a standard command */
+	index = cmd - SIOCIWFIRST;
+	if(index < dev->wireless_handlers->num_standard)
+		return dev->wireless_handlers->standard[index];
+
+	/* Try as a private command */
+	index = cmd - SIOCIWFIRSTPRIV;
+	if(index < dev->wireless_handlers->num_private)
+		return dev->wireless_handlers->private[index];
+
+	/* Not found */
+	return NULL;
+}
+
+/* From net80211/ieee80211.c in madwifi code */
+static u_int mhz2ieee(u_int freq) {
+	if(freq == 2484)
+		return 14;
+	if(freq < 2484)	/* 2Ghz Band */
+		return (freq - 2407) / 5;
+	if(freq < 5000) /* 5Ghz Band */
+		return 15 + ((freq - 2512) / 20);
+	return (freq - 5000) / 5; /* XXX: What's this?*/
+}
+
+int bond_xmit_bmc(struct sk_buff *skb, struct net_device *bond_dev)
+{
+	struct bonding *bond = bond_dev->priv;
+	struct bmc_bond_info *bmc = &bond->bmc_info;
+	struct slave *slave;
+	struct sk_buff *skb_copy;
+	int res = 1;
+	int ret = 1;
+	int should_broadcast = 0;
+	int i;
+	
+//#define CCKDEBUG
+#ifdef CCKDEBUG
+#error 1
+	should_broadcast = 1;
+#endif /* CCKDEBUG */
+	
+	read_lock(&bond->lock);
+	read_lock(&bmc->lock);
+	
+	read_lock(&bond->curr_slave_lock);
+	slave = bond->curr_active_slave;
+	read_unlock(&bond->curr_slave_lock);
+
+
+
+	if (!BOND_IS_OK(bond)) {
+		dev_kfree_skb(skb);
+		goto out;
+	}
+
+#if 0
+#define AODV_PORT	654
+#define MCRP_RREQ	11
+
+	if(skb->mac.ethernet->h_proto == ntohs(ETH_P_IP)) {
+		if(skb->nh.iph != NULL){
+			if((skb->nh.iph->daddr == 0xffffffff) && /* IP Broadcast address */
+				(skb->nh.iph->protocol == IPPROTO_UDP) && /* UDP? */
+				(skb->h.uh != NULL) && /* Has UDP header? */
+				(skb->data != NULL)){ /* Has data? */
+				if(skb->h.uh->dest == htons(AODV_PORT) &&
+					skb->data[0] == MCRP_RREQ){	/* Destination PORT == AODV PORT and Type == MCRP_RREQ*/
+					dd2printk("MCRP RREQ, Broadcast in multichannel\n");
+					should_broadcast = 1;
+				}
+			}
+		}
+	}
+#endif
+	if(skb->nh.iph != NULL){
+		//printk("Called --> %u\n", (skb->nh.iph->daddr & 0xff000000));
+		//printk(" True? %d", (((skb->nh.iph->daddr) & 0xff000000) == 0));
+
+		if(skb->dst != NULL){
+			//printk("Dest. addr %u.%u.%u.%u\n", (skb->nh.iph->daddr & 0x000000ff), 
+			//		(skb->nh.iph->daddr & 0x0000ff00) >> 8, (skb->nh.iph->daddr & 0x00ff0000) >> 16, 
+			//		(skb->nh.iph->daddr & 0xff000000) >> 24);
+			if(skb->dst->hh == NULL)
+				printk("skb->dst->hh is NULL\n");
+		} else {
+			//printk("skb->dst is NULL -->");
+			//printk(" H_PROTO 0x%04x\n",htons(skb->mac.ethernet->h_proto));
+		}
+
+		if(skb->dst != NULL && (skb->nh.iph->daddr & 0xff000000) == 0){
+			//printk("Broadcast packet\n");
+			//printk("Dest. addr %u.%u.%u.%u\n", NIPQUAD((skb->nh.iph->daddr)));
+			should_broadcast = 1;
+		}
+	}
+	
+	if(!should_broadcast && IS_UP(slave->dev) && (slave->state == BOND_STATE_ACTIVE)){
+		res = bond_dev_queue_xmit(bond, skb, slave->dev);
+		//printk("Unicast\n");
+		if (res) {
+			dev_kfree_skb(skb);
+		}
+	}
+
+
+	/* This is a common routing, and is seperate from match logic. 
+	 * Any packet which needs to be broadcast can be passed though piece of code.
+	 * Ideally make the match logic a seperate piece of code */
+
+	if(should_broadcast) {
+		read_unlock(&bmc->lock);	/* We need to obtain a write lock */
+		
+		/* We don't want another call to this function interfere with the channel switching.
+		* Hence, we use a write lock. A better way of doing this would be to have a queue 
+		* per channel. But that would mean timers, which are YUCKY! TM
+	 	* */
+	
+		write_lock(&bmc->lock);
+
+		if (IS_UP(slave->dev) && (slave->state == BOND_STATE_ACTIVE) ) {
+			struct iw_freq fr_get, fr_set;
+			u_int curr_chan;
+			memset((void *) &fr_get, 0, sizeof(struct iw_freq));
+			ret = bmc->get_iwfreq(slave->dev, NULL, (union iwreq_data *) &fr_get, NULL);
+			
+			/*Some drivers don't set fr_get.e to 1 for a frequency  val in fr_get.m ???*/
+			if(fr_get.e)
+				curr_chan = mhz2ieee(fr_get.m / 100000);
+			else 
+				curr_chan = fr_get.m;
+#ifdef CCKDEBUG
+			dd2printk("fr_get.m %d fr_get.e %d --> channel %d\n", fr_get.m, fr_get.e, curr_chan);
+#endif /* CCKDEBUG */
+
+			/* Check if current channel is on the broadcast list, if yes, send he packet out */
+			for(i=0; i < bmc->nchan; i++) {
+				if(bmc->channels[i] == (u32) curr_chan){
+					skb_copy = skb_clone(skb, GFP_ATOMIC);
+					if(!skb_copy){
+						 printk(KERN_ERR DRV_NAME ": Error: bond_bmc_broadcast(): "
+								 "skb_clone() failed\n");
+						 break;
+					}
+					res = bond_dev_queue_xmit(bond, skb_copy, slave->dev);
+					if (res) {
+						dev_kfree_skb(skb_copy);
+					}
+					break;
+				}
+			}
+
+			/* Now browse the list and broadcast */
+			for(i=0; i < bmc->nchan; i++) {
+				if(bmc->channels[i] != (u32) curr_chan){
+					skb_copy = skb_clone(skb, GFP_ATOMIC);
+					if(!skb_copy){
+						 printk(KERN_ERR DRV_NAME ": Error: bond_bmc_broadcast(): "
+								 "skb_clone() failed\n");
+						 continue;
+					}
+					
+					/* Prepare struct iwfreq */
+					if(bmc->channels[i] < 0){
+						dd2printk("FATAL: channel # %d < 0", bmc->channels[i]);
+						dev_kfree_skb(skb_copy);
+						continue;
+					}
+					fr_set.m = (__s32) bmc->channels[i];
+					fr_set.e = 0;
+					ret = bmc->set_iwfreq(slave->dev, NULL, (union iwreq_data *) &fr_set, NULL);
+					
+					res = bond_dev_queue_xmit(bond, skb_copy, slave->dev);
+					if (res) {
+						dev_kfree_skb(skb_copy);
+					}
+				}
+			}
+
+			/* Set back to original frequency */
+			fr_set = fr_get;
+			ret = bmc->set_iwfreq(slave->dev, NULL, (union iwreq_data *) &fr_set, NULL);
+
+			/* Read above for write lock reasoning */
+			write_unlock(&bmc->lock);
+			
+			/* We are done, just make sure you free the original copy of the skb*/
+			dev_kfree_skb(skb);
+		}
+	}
+
+	
+out:
+	if(!should_broadcast)
+		read_unlock(&bmc->lock);
+	read_unlock(&bond->lock);
+	return 0;
+}
+
+#undef CCKDEBUG
+
+#if 0
+int bond_bmc_main(struct bonding *bond, u32 channel, int add)
+{
+	if(add){
+		
+	} else {
+	}
+	
+}
+#endif
+
+int bond_bmc_channel(struct bonding *bond, struct bmc_req breq){
+	struct bmc_bond_info *bmc = &bond->bmc_info;
+	int i, j;
+	int channel = breq.channel;
+	int add = breq.add;
+	
+	if(channel < CHAN_MIN || channel > CHAN_MAX){
+		dd2printk("Channel %d no in range [%d %d]\n", channel, CHAN_MIN, CHAN_MAX);
+		return -1;
+	}
+	
+	write_lock(&bmc->lock);
+	
+	if(!add){ /* Find channel in the list */
+		dd2printk("Find and delete channel %d\n", channel);
+		for(i=0; i < bmc->nchan; i++){
+			if(bmc->channels[i] == channel){
+				dd2printk("Found channel %d in location %d of channel array\n",
+						bmc->channels[i], i);
+				for(j = i; j < bmc->nchan-1; j++){
+					bmc->channels[j] = bmc->channels[j+1];
+				}
+				bmc->channels[bmc->nchan-1] = -1;	/* One empty space, reset to -1 */
+				bmc->nchan--;				/* Decrement nof channels */
+				goto success;	/* Successfully deleted the channel */
+			}
+		}
+		if(i == bmc->nchan){	/**/
+			dd2printk("Did not find %d in the channel list\n", channel);
+			goto err;
+		}
+	}
+
+	if(add){
+		dd2printk("Trying to add channel %d to broadcast list\n", channel);
+		
+		if(bmc->nchan >= MAX_CHANNELS){
+			dd2printk("Already dealing with max channels %d, cannot add any more sorry!!!", bmc->nchan);
+			goto err;
+		}
+		
+		for(i=0; i < bmc->nchan; i++){
+			if(bmc->channels[i] == channel){
+				dd2printk("Channel %d already in channel list at position %d, no action taken\n",
+						channel, i);
+				goto err;
+			}
+		}
+		
+		bmc->channels[bmc->nchan] = channel;
+		bmc->nchan++;
+		dd2printk("Added %d to the channel list. Channel list has %d channels now\n", 
+				bmc->channels[bmc->nchan-1], bmc->nchan);
+		goto success;
+	}
+
+	dd2printk("Control should never reach here\n");
+
+success:
+	write_unlock(&bmc->lock);
+	return 0;
+	
+err:
+	write_unlock(&bmc->lock);
+	return -1;
+}
+
+void bond_bmc_dump_channels(struct bonding *bond){
+	int i;
+
+	dd2printk("%d Channels -->", bond->bmc_info.nchan);
+	
+	for(i=0; i < bond->bmc_info.nchan; i++){
+		printk(" %d", bond->bmc_info.channels[i]);
+	}
+
+	printk("\n");
+	return;
+}
+
+/* Does not read/write anything, no locking required*/
+int bond_bmc_init_slave(struct bonding *bond, struct slave *slave)
+{
+	struct bmc_bond_info *bmc = &bond->bmc_info;
+	int res = 1;
+	
+	write_lock(&bmc->lock);
+	
+	/* Get wireless channel get/set handlers */
+	bmc->get_iwfreq = get_handler(slave->dev, SIOCGIWFREQ);
+	bmc->set_iwfreq = get_handler(slave->dev, SIOCSIWFREQ);
+	
+	if(!bmc->get_iwfreq || !bmc->set_iwfreq){
+		printk(KERN_WARNING DRV_NAME ": %s(): %s does not have %s %s handler(s)\n",
+				__func__, slave->dev->name,
+				bmc->get_iwfreq?"":"SIOCGIWFREQ", bmc->set_iwfreq?"":"SIOCSIWFREQ");
+	} else {
+		printk(DRV_NAME ": %s(): %s seems like a wireless device. Things seem fine!\n",
+				__func__, slave->dev->name);
+		res = 0;
+	}
+	
+	write_unlock(&bmc->lock);
+
+	if(res)
+		return -1;
+	
+	return 0;
+}
+
+
+/* Caller must hold bond lock for write */
+void bond_bmc_deinit_slave(struct bonding *bond, struct slave *slave)
+{
+	int i;
+	write_lock(&bond->bmc_info.lock);
+	
+	for(i=0; i < MAX_CHANNELS; i++)
+		bond->bmc_info.channels[i] = -1;
+	
+	bond->bmc_info.set_iwfreq = NULL;
+	bond->bmc_info.get_iwfreq = NULL;
+	bond->bmc_info.nchan = 0;
+	
+	write_unlock(&bond->bmc_info.lock);
+
+	return;
+}
+
+int bond_bmc_initialize(struct bonding *bond)
+{
+	int i;
+	max_bonds_orig = max_bonds;
+	max_bonds = 1;			/* We only allow for one interface to be enslaved in this mode */
+	for(i=0; i < MAX_CHANNELS; i++)
+		bond->bmc_info.channels[i] = -1;
+	bond->bmc_info.nchan = 0;
+	bond->bmc_info.set_iwfreq = NULL;
+	bond->bmc_info.get_iwfreq = NULL;
+	return 0;
+}
+
+void bond_bmc_deinitialize(struct bonding *bond)
+{
+	/* All operations are done when we remove the main*/
+	max_bonds = max_bonds_orig;
+	return;
+}

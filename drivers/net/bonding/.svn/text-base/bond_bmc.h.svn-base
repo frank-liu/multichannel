@@ -1,0 +1,37 @@
+
+/* Author: Chandrakanth Chereddi. cchered2@uiuc.edu */
+
+#ifndef _BOND_BMC_H
+#define _BOND_BMC_H
+
+#include "bonding.h"
+#include <linux/types.h>
+#include <net/iw_handler.h>
+
+#define MAX_CHANNELS 256
+#define CHAN_MIN 0
+#define CHAN_MAX 100
+
+struct bmc_bond_info{
+	s32		channels[MAX_CHANNELS];	/* Just considering an upper limit */
+	int		nchan;
+	iw_handler	get_iwfreq; 	/* Handler to get the current channel */
+	iw_handler	set_iwfreq; 	/* Handler to set the channel */
+	rwlock_t	lock; 		/* Read Write lock */
+
+};
+
+struct bmc_req {
+	s32 	channel;	/* Channel to add or remove */
+	int	add;		/* Add or remove? */
+};
+
+int	bond_xmit_bmc(struct sk_buff *skb, struct net_device *bond_dev);
+int	bond_bmc_channel(struct bonding *bond, struct bmc_req);
+void	bond_bmc_dump_channels(struct bonding *bond);
+int	bond_bmc_initialize(struct bonding *bond);
+void	bond_bmc_deinitialize(struct bonding *bond);
+int	bond_bmc_init_slave(struct bonding *bond, struct slave *slave);
+void	bond_bmc_deinit_slave(struct bonding *bond, struct slave *slave);
+
+#endif /* _BOND_BMC_H */

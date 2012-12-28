@@ -1,0 +1,17 @@
+#
+# Makefile for the Ethernet Bonding driver
+#
+
+O_TARGET := bonding.o
+
+obj-y	 := bond_main.o \
+            bond_3ad.o  \
+	    bond_alb.o \
+	    bond_muc.o \
+	    bond_bmc.o \
+	    bond_muic.o
+
+obj-m	 := $(O_TARGET)
+
+include $(TOPDIR)/Rules.make
+

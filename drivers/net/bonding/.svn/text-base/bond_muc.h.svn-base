@@ -1,0 +1,43 @@
+/*Header for the multi channel mode in the bonding driver*/
+
+#ifndef _BOND_MUC_H
+#define _BOND_MUC_H
+
+#include "bonding.h"
+
+struct muc_route_entry
+{
+	u32		dip_addr;
+	struct 		net_device *out_dev;
+	struct 		muc_route_entry *prev;
+	struct 		muc_route_entry *next;
+};
+
+struct muc_route_u_entry
+{
+	u32		dip_addr;
+	char 		out_dev_name[IFNAMSIZ]; /*OUT Device is a name*/
+	struct 		muc_route_entry *prev;
+	struct 		muc_route_entry *next;
+};
+
+struct muc_bond_info
+{
+	struct 		muc_route_entry *head;//Points to the head of the route list
+	rwlock_t	lock; // Read write lock for now
+#ifdef CONFIG_PROC_FS
+	struct		proc_dir_entry *proc_entry;
+#endif /* CONFIG_PROC_FS */
+};
+
+int	bond_xmit_muc(struct sk_buff *skb, struct net_device *bond_dev);
+int	bond_muc_initialize(struct bonding *bond);
+void	bond_muc_deinitialize(struct bonding *bond);
+int	bond_muc_init_slave(struct bonding *bond, struct slave *slave);
+void	bond_muc_deinit_slave(struct bonding *bond, struct slave *slave);
+int	bond_muc_route_entry(struct bonding *bond, struct muc_route_entry *entry);
+void	bond_muc_dump_route_entries(struct bonding *bond);
+void	bond_muc_empty_route_table(struct bonding *bond);
+inline unsigned char* 	mac_sprintf(const u_int8_t *mac);
+
+#endif /* _BOND_MUC_H */

@@ -1,0 +1,194 @@
+/*Header for the multi channel mode in the bonding driver*/
+
+#ifndef _BOND_MUIC_H
+#define _BOND_MUIC_H
+
+#include "bonding.h"
+#include <net/iw_handler.h>
+#include <linux/sched.h>
+#include <linux/timer.h>
+#include <asm/atomic.h>
+
+#define MUIC_MAX_CHANNELS 16
+#define MUIC_CHAN_MIN 0
+#define MUIC_CHAN_MAX 170
+
+struct muic_broadcast_entry
+{
+	struct		slave *out_slave;
+	s32		channel;
+	int		chan_index;
+	struct 		muic_broadcast_entry *prev;
+	struct 		muic_broadcast_entry *next;
+};
+
+struct muic_broadcast_u_entry
+{
+	s32		channel;
+	char 		out_slave[IFNAMSIZ]; /*OUT Slave is a name*/
+};
+
+struct muic_switch_u_req
+{
+	s32		channel;
+	char		slave[IFNAMSIZ];
+};
+
+/* Response for stats request */
+struct muic_stats_u_response
+{
+	int  nchan;
+	int channel[MUIC_MAX_CHANNELS];
+	unsigned int usage[MUIC_MAX_CHANNELS];
+};
+
+/* Request for stats should mention the slave on which you expect the information */
+
+struct muic_stats_u_req
+{
+	char slave[IFNAMSIZ];
+	struct muic_stats_u_response *response;
+};
+
+
+/*Request for changing channel mininum/maximum time */
+
+struct muic_chan_time_u_req
+{
+	int max_or_min ;           // 0 for changing chan minimum time, 1 for changing max time
+	unsigned int chan_time;   // in milliseconds, valid values 0, 10, 20, 30 ... 200
+	
+};
+
+
+struct muic_route_entry
+{
+	u32		dip_addr;
+	s32		dst_chan;
+	int		chan_index;
+	struct 		net_device *out_dev;
+	struct 		slave *out_slave;
+	struct 		muic_route_entry *prev;
+	struct 		muic_route_entry *next;
+};
+
+struct muic_route_u_entry
+{
+	u32		dip_addr;
+	s32		dst_chan;
+	char 		out_dev_name[IFNAMSIZ]; /*OUT Device is a name*/
+};
+
+struct muic_req {
+	s32     channel;	/* Channel to add or remove */
+	int     add;		/* Add or remove? */
+	struct	slave *sl;	/* Slave to which this channel is added */
+};
+
+struct muic_u_req { 
+	s32     	channel;	/* Channel to add or remove */
+	int     	add;		/* Add or remove? */
+	char		slave[IFNAMSIZ]; /* Name of the slave, user space knows only this */
+};
+
+struct muic_channel_usage {
+	unsigned long	cur_usage;	/* Usage counted in micro seconds since last update */
+	unsigned long	usage;		/* Overall usage - in micro seconds - exponentially weighted: Normlized over one second */
+};
+
+
+
+struct muic_bond_info
+{
+	struct 		muic_route_entry *head;		/* Points to the head of the route list */
+	struct		muic_broadcast_entry *br_head;	/* Points to the head of the broadcast list */
+	rwlock_t	lock; 				/* Read write lock for now */
+	unsigned	dropped;			/* Total packets dropped */
+	unsigned	broadcast;			/* Broadcast packets */
+#ifdef CONFIG_PROC_FS
+	struct		proc_dir_entry *proc_entry;
+#endif /* CONFIG_PROC_FS */
+	unsigned long	min_time_jiffies;
+	unsigned long	max_time_jiffies;
+	
+};
+
+
+struct muic_slave_info
+{
+	struct		bonding *bond;
+	struct		net_device *dev;		/* Just incase */
+	iw_handler	get_iwfreq;     		/* Handler to get the current channel */
+	iw_handler	set_iwfreq;     		/* Handler to set the channel */
+	
+	/* To avoid dereferencing using the main net_device *dev pointer */
+	struct iw_statistics * (*get_wireless_stats) (struct net_device *dev);	
+	
+	rwlock_t	lock;           		/* Read Write lock */
+	s32		cur_chan;			/* XXX: How can we ever be sure? */
+	int		cur_chan_index;
+	int		nchan;				/* Number of channels */
+	s32             channels[MUIC_MAX_CHANNELS]; 	/* Just considering an upper limit */
+
+	/* Channel usage stats */
+	struct		muic_channel_usage usage_info[MUIC_MAX_CHANNELS];
+	/* Main queues to hold packets */
+	struct		sk_buff_head queues[MUIC_MAX_CHANNELS];
+	
+	/* Stats */
+	unsigned	tx_packets[MUIC_MAX_CHANNELS];	/* Nof packets for each channel */
+	unsigned	tx_bytes[MUIC_MAX_CHANNELS];	/* Nof bytes per channel */
+	unsigned	avg_qlen[MUIC_MAX_CHANNELS];	/* Average nof packets in queue, at the beginning of channel service */
+	
+	/*synchronization */
+	atomic_t	timer_initialized;
+	atomic_t	chan_switcher_running;		/* To simulate read_trylock */
+	atomic_t	switch_deferred;		/* Switch delayed because transmissions are pending */
+	
+	/* Deferral stats */
+	unsigned int	switch_defer_count;		/* # of times we deferred switch, - to impose an upper limit */
+	unsigned int	total_deferrals;
+
+	/* Scheduling stats */
+	unsigned int	exit_q_empty;			/* Exit chan_switcher transmit loop because Q is empty */
+	unsigned int	exit_t_max;			/* Exit chan_switcher transmit loop because MAX TIME reached */
+
+	/* Timer!!! - switch */
+	struct		timer_list timer;
+
+	/* Stats timer */
+	struct		timer_list stats_timer;
+	
+	/* Complete time calculations */
+	unsigned long	last_switch;			/* Jiffies when last switch occured */
+	unsigned long	tx_start;			/* Time we started the transmit*/
+	unsigned long	tx_complete;			/* XXX Probable time when transmit will be completed */
+	unsigned long	relative_tx_complete;		/* XXX Probable time when transmit will be completed */
+	
+	/* Stats */
+	unsigned long	total_tx_packets;
+	unsigned long	total_tx_bytes;
+	unsigned int	switches;			/* Nof times we switched channel */
+	unsigned long	average_tx_complete;
+	unsigned long	average_time_on_channel;
+	unsigned long	average_packets_per_switch;
+	unsigned long	average_rate;			/* Number of packets we sent out per switch per second */
+	unsigned long	total_tx_time;
+
+	unsigned long	packets_last_switch;		/* Number of packets since last switch */
+};
+
+int	bond_xmit_muic(struct sk_buff *skb, struct net_device *bond_dev);
+int	bond_muic_initialize(struct bonding *bond);
+void	bond_muic_deinitialize(struct bonding *bond);
+int	bond_muic_init_slave(struct bonding *bond, struct slave *slave);
+void	bond_muic_deinit_slave(struct bonding *bond, struct slave *slave);
+int	bond_muic_route_entry(struct bonding *bond, struct muic_route_entry *entry);
+void	bond_muic_dump_route_entries(struct bonding *bond);
+void	bond_muic_empty_route_table(struct bonding *bond);
+int     bond_muic_channel(struct bonding *bond, struct muic_req *muic_req);
+int	bond_muic_broadcast_entry(struct bonding *bond, struct muic_broadcast_entry *entry);
+int	bond_muic_explicit_switch_channel(struct muic_slave_info *slave, s32 channel);
+int	bond_muic_return_stats(struct muic_slave_info *slave, struct muic_stats_u_response *response);
+
+#endif /* _BOND_MUIC_H */

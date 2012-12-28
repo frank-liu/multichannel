@@ -1,0 +1,505 @@
+/*This is file which contains all the implementation for
+ * the multi channel mode in the bonding driver*/
+
+/*This is the function which is called for each paket in this mode.
+ * From within this function we call the routing (decision) functions*/
+
+/* Changes by Rishi Bhardwaj <rbhardw2 at uiuc dot edu> :
+ * Fixed a memory bug. Call to kmalloc with GFP_KERNEL flag may put
+ * the process to sleep. Such a call should not be made after acquiring
+ * a spin_lock with bottom halves disabled.
+ */
+
+#include <linux/skbuff.h>
+#include <linux/netdevice.h>
+#include <linux/etherdevice.h>
+#include <linux/pkt_sched.h>
+#include <linux/spinlock.h>
+#include <linux/slab.h>
+#include <linux/timer.h>
+#include <linux/ip.h>
+#include <linux/ipv6.h>
+#include <linux/if_arp.h>
+#include <linux/if_ether.h>
+#include <linux/if_bonding.h>
+#include <linux/if_vlan.h>
+#include <linux/netdevice.h>
+#include <linux/init.h>
+#include <linux/wireless.h>
+#include <linux/time.h>
+#include <linux/kernel.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+#include <linux/module.h>
+#include <net/ipx.h>
+#include <net/iw_handler.h>
+#include <asm/byteorder.h>
+#include <net/dst.h>
+#include "bonding.h"
+#include "bond_muc.h"
+
+
+#define dd2printk(fmt, args...) \
+	printk(KERN_DEBUG     \
+			DRV_NAME ": %s() %d: " fmt, __FUNCTION__, __LINE__ , ## args )	       
+
+#define d2printk(format , args...)  printk(DRV_NAME ": %s(): " format , __FUNCTION__, ## args)
+							       
+#if 0
+#define d2printk(format , args...)
+#endif
+							       
+//XXX: Should do this in a cleaner fashion
+int bond_xmit_broadcast(struct sk_buff *skb, struct net_device *bond_dev);
+
+int bond_xmit_muc(struct sk_buff *skb, struct net_device *bond_dev)
+{
+	struct bonding *bond = bond_dev->priv;
+	struct muc_route_entry *tmp;
+	int res = 1;
+	static unsigned count = 0;
+
+	read_lock(&bond->lock);
+	read_lock(&bond->curr_slave_lock);
+	read_lock(&bond->muc_info.lock);
+
+	if (!BOND_IS_OK(bond)) {
+		goto out;
+	}
+	count++;
+	if(skb->dst != NULL) {
+		if(skb->dst->hh != NULL) {
+			for(tmp = bond->muc_info.head; tmp != NULL; tmp = tmp->next) {
+				if(skb->nh.iph->daddr == tmp->dip_addr) {
+					d2printk("Found match for %u.%u.%u.%u --> %s\n",
+							NIPQUAD(skb->nh.iph->daddr), tmp->out_dev->name);
+					res = bond_dev_queue_xmit(bond, skb, tmp->out_dev);
+				}
+			}
+		}
+	}
+	else {
+		d2printk("skb->dst is NULL, ARP perhaps? 0x%04x - %u.%u.%u.%u\n", 
+				htons(skb->mac.ethernet->h_proto), NIPQUAD(skb->nh.iph->daddr));
+		d2printk("calling bond_xmit_broadcast()\n");
+		goto broadcast;
+	}
+
+out:
+	if (res) {
+		/* no suitable interface, frame not sent */
+		dev_kfree_skb(skb);
+	}
+	
+	read_unlock(&bond->muc_info.lock);
+	read_unlock(&bond->curr_slave_lock);
+	read_unlock(&bond->lock);
+	return 0;
+	
+broadcast:
+	res = bond_xmit_broadcast(skb, bond_dev);
+	read_unlock(&bond->muc_info.lock);
+	read_unlock(&bond->curr_slave_lock);
+	read_unlock(&bond->lock);
+	return 0;
+}
+
+
+
+/*ioctl call ONLY, no one else should use it.*/
+/*Caller has Bond lock*/
+int bond_muc_route_entry(struct bonding *bond, struct muc_route_entry *entry)
+{
+	/*Case 1: (Add): Check if there is an entry for 
+	 * the given MAC address. If NOT -> Add new entry*/
+
+	/*Case 2: (Update): Check if there is an entry for
+	 * the given MAC address. If YES && entry->out_dev is NOT NULL,
+	 * then "Update out_dev to new out_dev"*/
+
+	/*Case 3: (Remove): Check if there is an entry for
+	 * the given MAC address. if YES && entry->out_dev is NULL
+	 * the "remove the route entry"*/
+	
+	/*XXX: Since all operations perform some kind of a route operation
+	 * without any exception, write lock even before you go in.*/
+	
+	/*XXX: Should check for entry->out_dev in slave list??*/
+	
+	struct muc_route_entry *new_entry, *tmp;
+	static int found;
+
+	write_lock(&bond->muc_info.lock);
+	
+	/*First Case 3: Otherwise we need to throw up an error*/
+	if(entry->out_dev == NULL) {
+		d2printk("Trying to find and remove route entry which matches %u.%u.%u.%u\n", 
+				NIPQUAD(entry->dip_addr));
+		
+		found = 0;
+		for(tmp = bond->muc_info.head; tmp != NULL && !found; tmp = tmp->next) {
+			d2printk("Route Removal: Checking entry %u.%u.%u.%u --> %s with %u.%u.%u.%u: %s\n", 
+				NIPQUAD(tmp->dip_addr), tmp->out_dev->name, 
+				 NIPQUAD(entry->dip_addr), (tmp->dip_addr == entry->dip_addr)?"Match":"Mismatch");
+			
+			if(entry->dip_addr == tmp->dip_addr) {
+				found = 1;
+				/*Remove the entry*/
+				if (tmp == bond->muc_info.head) {//This entry is the head of the list
+					if(tmp->next != NULL) {
+						bond->muc_info.head = tmp->next;
+						bond->muc_info.head->prev = NULL;
+					} else {
+						bond->muc_info.head = NULL;
+					}
+					d2printk("Removing the head\n");
+
+				} else {//Not head
+					if(tmp->prev != NULL) {
+						tmp->prev->next = tmp->next; //Link top entry to bottom entry
+					}
+					if(tmp->next != NULL) {
+						tmp->next->prev = tmp->prev; //Link bottom entry to top entry
+					}
+				}
+				
+				d2printk("Removing entry %u.%u.%u.%u --> %s\n", 
+						NIPQUAD(tmp->dip_addr), tmp->out_dev->name);
+				kfree(tmp);
+				goto success;
+			}
+		}
+
+		if (found == 0) {/*Entry not found*/
+			d2printk("(REMOVE) Error: routing entry not found. No action taken\n");
+		}
+	}
+	else { /*entry->out_dev != NULL*/
+		found = 0;
+		for(tmp = bond->muc_info.head; tmp != NULL && !found; tmp = tmp->next) {
+			if(entry->dip_addr == tmp->dip_addr) {
+				found = 1;
+				/*Update route with new_outdev*/
+				d2printk("Updating route entry for %u.%u.%u.%u from %s to %s\n",
+						NIPQUAD(tmp->dip_addr), tmp->out_dev->name, 
+						entry->out_dev->name);
+				tmp->out_dev = entry->out_dev;
+				goto success;
+			}
+		}
+
+		if (found == 0) {/*Entry not found*/
+			/*Add a new route entry, to the list*/
+
+// Since the process has acquired spin lock with bottom halves disabled (see bonding_main.c), we should call
+// kmalloc with the GFP_ATOMIC flag and not with GFP_KERNEL flag.
+			new_entry = (struct muc_route_entry *) kmalloc(sizeof(struct muc_route_entry), GFP_ATOMIC);
+			if (new_entry == NULL) {
+				printk(KERN_ERR DRV_NAME "Could not allocate memory for new routing entry\n");
+				goto err;
+			}
+			new_entry->dip_addr = entry->dip_addr;
+			new_entry->out_dev = entry->out_dev;
+			
+			if(bond->muc_info.head == NULL)	{
+				d2printk("Adding as LIST HEAD, new route entry %u.%u.%u.%u --> %s\n",
+						NIPQUAD(entry->dip_addr), entry->out_dev->name);
+				new_entry->next = new_entry->prev = NULL;	
+				bond->muc_info.head = new_entry;
+			}
+			else {//Add a new entry at the end of the list
+				for(tmp = bond->muc_info.head; tmp->next != NULL; tmp = tmp->next);//Traverse upto the end
+				d2printk("Adding new route entry at tail %u.%u.%u.%u --> %s\n",
+						NIPQUAD(entry->dip_addr), entry->out_dev->name);
+				new_entry->next = NULL;
+				new_entry->prev = tmp;
+				tmp->next = new_entry;
+			}
+		}
+
+	}
+	
+success://XXX: Redundant, remove?
+	write_unlock(&bond->muc_info.lock);
+	return 0;
+err:
+	write_unlock(&bond->muc_info.lock);
+	return -1;	
+}
+
+
+/* Caller has bond read lock*/
+void bond_muc_dump_route_entries(struct bonding *bond)
+{
+	struct muc_route_entry *tmp;
+	
+	read_lock(&bond->muc_info.lock);
+	for(tmp = bond->muc_info.head; tmp != NULL; tmp = tmp->next) {
+		//printk("%s --> %s\n", mac_sprintf(tmp->dest), tmp->out_dev->name);
+		printk("%u.%u.%u.%u --> %s\n", 
+				NIPQUAD(tmp->dip_addr), tmp->out_dev->name);
+	}
+	read_unlock(&bond->muc_info.lock);
+	return;
+}
+
+/* Does not read/write anything, no locking required*/
+int bond_muc_init_slave(struct bonding *bond, struct slave *slave)
+{
+	//struct slave *tmp;
+	d2printk("%s(): New slave %s\n", __func__, slave->dev->name);
+	return 0;
+}
+
+/*//Why do I need this? bond_main.c does this for us?
+void bond_muc_dump_slave_list(struct bonding *bond)
+{
+	struct slave *tmp;
+	for(tmp = bond->first_slave; tmp != NULL; tmp = tmp->next)
+	{
+		d2printk("%s\n", tmp->dev->name);
+	}
+	return;
+}
+*/
+
+/* Caller must hold bond lock for write */
+void bond_muc_deinit_slave(struct bonding *bond, struct slave *slave)
+{
+	struct muc_route_entry *tmp;
+	
+	d2printk("Remove all route entries with Outdev: %s\n", slave->dev->name);
+	/*Traverse the route_list & remove all entries with out_dev = slave->dev*/
+
+	write_lock(&bond->muc_info.lock);
+	for(tmp = bond->muc_info.head; tmp != NULL; tmp = tmp->next) {
+		if(tmp->out_dev == slave->dev) {/*Remove from route table*/
+				/*Now remove the entry*/
+			if (tmp == bond->muc_info.head) {//Remove head
+				if(tmp->next != NULL) {
+					bond->muc_info.head = tmp->next;
+					bond->muc_info.head->prev = NULL;
+				} else {
+					bond->muc_info.head = NULL;
+				}
+				d2printk("Removing the head\n");
+			} else {//Not head
+				if(tmp->prev != NULL) {
+					tmp->prev->next = tmp->next; //Link top entry to bottom entry
+				}
+				if(tmp->next != NULL) {
+					tmp->next->prev = tmp->prev; //Link bottom entry to top entry
+				}
+			}
+			d2printk("Removing entry %u.%u.%u.%u --> %s\n",
+					NIPQUAD(tmp->dip_addr), tmp->out_dev->name);
+			kfree(tmp);
+		}
+	}
+	write_unlock(&bond->muc_info.lock);
+	
+	return;
+}
+
+void bond_muc_empty_route_table(struct bonding *bond)
+{
+	struct muc_route_entry *node1, *node2;
+	write_lock(&bond->muc_info.lock);
+	for(node1 = bond->muc_info.head; node1 != NULL;) {
+		node2 = node1->next;
+		d2printk("Removing entry %u.%u.%u.%u -- %s\n", 
+				NIPQUAD(node1->dip_addr), node1->out_dev->name);
+		kfree(node1);
+		node1 = node2;
+	}
+	bond->muc_info.head = NULL;
+	write_lock(&bond->muc_info.lock);
+
+	return;
+}
+
+//#define CCK_PROC_FS
+#ifdef CCK_PROC_FS
+#ifdef CONFIG_PROC_FS
+#define MUC_PROC_FILE_NAME "muc_routes"
+
+#define SEQ_START_TOKEN ((void *)1)
+
+extern struct proc_dir_entry *bond_proc_dir;	/*Move this to GLOBALS*/
+
+static void *bond_muc_info_seq_start(struct seq_file *seq, loff_t *pos)
+{
+	struct bonding *bond = seq->private;
+	struct muc_route_entry *rentry;
+	loff_t off = 0;
+	//struct slave *slave;
+	//int i;
+
+	/* make sure the bond won't be taken away */
+        read_lock(&dev_base_lock);
+        read_lock_bh(&bond->lock);
+	read_lock(&bond->muc_info.lock);
+
+        if (*pos == 0) {
+                return SEQ_START_TOKEN;
+        }
+
+	for(rentry = bond->muc_info.head; rentry != NULL; rentry = rentry->next) {
+		if(++off == *pos) {
+			return rentry;
+		}
+	}
+
+        return NULL;
+}
+        
+static void bond_muc_info_seq_stop(struct seq_file *seq, void *v)
+{
+	struct bonding *bond = seq->private;
+	read_unlock(&bond->muc_info.lock);
+	read_unlock_bh(&bond->lock);
+	read_unlock(&dev_base_lock);
+}
+
+static void *bond_muc_info_seq_next(struct seq_file *seq, void *v, loff_t *pos)
+{
+	struct bonding *bond = seq->private;
+	struct muc_route_entry *rentry = v;
+
+	++*pos;
+	if (v == SEQ_START_TOKEN) {
+		return bond->muc_info.head;
+	}
+
+	if(rentry != NULL){
+		rentry = rentry->next;
+		return rentry;
+	}
+	
+	return NULL;
+}
+static void bond_muc_pretty_print_rentry(struct seq_file *seq, const struct muc_route_entry *rentry)
+{
+	struct bonding *bond = seq->private;
+	
+	if(rentry == SEQ_START_TOKEN) {
+		seq_printf(seq, "\nRouting Table\n");
+		if(bond->muc_info.head != NULL)
+			seq_printf(seq, "%u.%u.%u.%u \t %s\n",  
+				NIPQUAD(bond->muc_info.head->dip_addr), 
+				bond->muc_info.head->out_dev->name);
+	} else {
+		seq_printf(seq, "%u.%u.%u.%u \t %s\n",  
+				NIPQUAD(rentry->dip_addr), 
+				rentry->out_dev->name);
+	}
+}
+static int bond_muc_info_seq_show(struct seq_file *seq, void *v)
+{
+	if (v == SEQ_START_TOKEN) {
+		seq_printf(seq, "%s\n", "MUC Version comes here :D");
+		bond_muc_pretty_print_rentry(seq, v); // NULL --> print head
+	} else {
+		bond_muc_pretty_print_rentry(seq, v);
+	}
+
+	return 0;
+}
+
+static struct seq_operations bond_muc_info_seq_ops = {
+	.start = bond_muc_info_seq_start,
+	.next  = bond_muc_info_seq_next,
+	.stop  = bond_muc_info_seq_stop,
+	.show  = bond_muc_info_seq_show,
+};
+
+static int bond_muc_info_open(struct inode *inode, struct file *file)
+{
+	struct seq_file *seq;
+	struct proc_dir_entry *proc;
+	int res;
+	res = seq_open(file, &bond_muc_info_seq_ops);
+        if (!res) {
+                /* recover the pointer buried in proc_dir_entry data */
+                seq = file->private_data;
+                proc = PDE(inode);
+                seq->private = proc->data;
+        }
+
+        return res;
+}
+
+
+
+static struct file_operations bond_muc_info_fops = {
+	.owner   = THIS_MODULE,
+	.open    = bond_muc_info_open,
+	.read    = seq_read,
+	.llseek  = seq_lseek,
+	.release = seq_release,
+};
+
+//XXX: Locking requirements???!!! 
+//Does caller have lock (to be called from muc_initialize) 
+//bond_main routines don't lock,...
+//perhaps cause they haven't yet initialized the driver?
+//
+static int bond_muc_create_proc_entry(struct bonding *bond)
+{
+	if (bond_proc_dir) {
+		bond->muc_info.proc_entry = create_proc_entry(MUC_PROC_FILE_NAME,
+							S_IRUGO,
+							bond_proc_dir);
+		if (bond->muc_info.proc_entry == NULL) {
+			printk(KERN_WARNING DRV_NAME
+			       ": Warning: Cannot create /proc/net/%s/%s\n",
+			       DRV_NAME, MUC_PROC_FILE_NAME);
+		} else {
+			bond->muc_info.proc_entry->data = bond;
+			bond->muc_info.proc_entry->proc_fops = &bond_muc_info_fops;
+			bond->muc_info.proc_entry->owner = THIS_MODULE;
+			//memcpy(bond->proc_file_name, bond_dev->name, IFNAMSIZ);
+		}
+	}
+	return 0;
+}
+
+//XXX: Locking requirements???!!!
+//To be called from muc_deinitialize
+static void bond_muc_remove_proc_entry(struct bonding *bond)
+{
+        if (bond_proc_dir && bond->muc_info.proc_entry) {
+		remove_proc_entry(MUC_PROC_FILE_NAME, bond_proc_dir);
+		bond->muc_info.proc_entry = NULL;
+	}
+}
+
+#endif /* CONFIG_PROC_FS*/
+#endif /* CCK_PROC_FS */
+
+int bond_muc_initialize(struct bonding *bond)
+{
+	write_lock(&bond->muc_info.lock);
+	bond->muc_info.head = NULL;
+#ifdef CCK_PROC_FS
+#ifdef CONFIG_PROC_FS
+	bond_muc_create_proc_entry(bond);
+#endif /* CONFIG_PROC_FS*/
+#endif /* CCK_PROC_FS */
+	write_unlock(&bond->muc_info.lock);
+	d2printk("Initialized\n");
+	return 0;
+}
+
+void bond_muc_deinitialize(struct bonding *bond)
+{
+	d2printk("Trying to de-initialize MUC de-initialized\n");
+	bond_muc_empty_route_table(bond);
+#ifdef CCK_PROC_FS
+#ifdef CONFIG_PROC_FS
+	bond_muc_remove_proc_entry(bond);
+#endif /* CONFIG_PROC_FS*/
+#endif /* CCK_PROC_FS */
+	d2printk("De-init successful\n");
+	return;
+}
