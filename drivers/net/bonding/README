@@ -1,3 +1,5 @@
+Modify round-robin mode code.
+
 Replace the code in the /bonding directory in the kernel 
 source tree with this code. Use the standard module
 compilation procedure of linux to compile the bonding 
