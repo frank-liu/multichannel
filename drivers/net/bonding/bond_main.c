@@ -4195,7 +4195,7 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 	struct slave *slave;
 	int i, slave_no, res = 1; //pkt_size=1000;
 	struct iphdr *iph = ip_hdr(skb);
-	struct ethhdr *mh = eth_hdr(skb); //get mac address
+	//struct ethhdr *mh = eth_hdr(skb); //get mac address
 	char * wlan0 = "wlan0";
 	char * wlan1 = "wlan1";
 	//struct slave *start_at = bond->first_slave; //lp wlan0
@@ -4223,7 +4223,8 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 		else
 			pr_warning("skb doesn't have valid dev.\n");
 
-		//打印skb的MAC地址....pr_warning("skb->dev MAC: %pM",&mh->h_source);
+		//打印skb的MAC地址
+		//pr_warning("skb->dev MAC: %pM",&mh->h_source);
 		if (!slave)
 		{
 			pr_info("%s doesn't exist! Goto out.\n", slave->dev->name);
@@ -4275,14 +4276,6 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 				break;
 		}
 	}
-
-	//----There are 3 ways to send packets----
-	//1) lp: alternately sending pkts between wlan0 and wlan1
-	//start_at = slave;
-	//2) lp: select only wlan0 to send pkts
-	//start_at = slave0;
-	//3) lp: select only wlan1 to send pkts
-	//start_at = slave1;
 
 	out: if (res)
 	{
