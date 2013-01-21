@@ -4188,6 +4188,7 @@ static int bond_set_mac_address(struct net_device *bond_dev, void *addr)
 	return res;
 }
 
+/*throughput in roundrobin-mode needs to be tested under TCP*/
 static int bond_xmit_roundrobin(struct sk_buff *skb,
 		struct net_device *bond_dev)
 {
