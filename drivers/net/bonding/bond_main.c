@@ -4188,7 +4188,11 @@ static int bond_set_mac_address(struct net_device *bond_dev, void *addr)
 	return res;
 }
 
-/*throughput in roundrobin-mode needs to be tested under TCP*/
+/*Throughput in roundrobin-mode needs to be tested under TCP*/
+/*
+ * 1) All pkts are transmitted via wlan0
+ * 2) Channel Detection to be added in this file, and cited in below function.
+ */
 static int bond_xmit_roundrobin(struct sk_buff *skb,
 		struct net_device *bond_dev)
 {
@@ -4196,13 +4200,17 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 	struct slave *slave;
 	int i, slave_no, res = 1; //pkt_size=1000;
 	struct iphdr *iph = ip_hdr(skb);
-	//struct ethhdr *mh = eth_hdr(skb); //get mac address
+	//get mac address
+	//struct ethhdr *mh = eth_hdr(skb);
 	char * wlan0 = "wlan0";
 	char * wlan1 = "wlan1";
 	//struct slave *start_at = bond->first_slave; //lp wlan0
 	//struct slave *start_at; //lp wlan0
 	//struct slave *start_at = (bond->first_slave)->next; //lp wlan1
+
+	//specify wlan0 as a transmission slave
 	slave = bond->first_slave;
+
 	if (iph->protocol >= 0) // test with ping, 128
 	{
 		//read_lock(&bond->lock); dev = dev_get_by_name(&init_net, wlan1);
@@ -4211,7 +4219,8 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 		 * 这也就是为什么bond_dev_queue_xmit(bond, skb, slave->dev)要传入slave->dev的道理.
 		 */
 
-		if(skb->dev)
+//This below if/else statments are not helpful for now.
+/*		if(skb->dev)
 		{
 			if (strcmp(skb->dev->name, wlan0) == 0)
 				slave = bond->first_slave->next;
@@ -4222,13 +4231,13 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 			pr_warning("skb->dev = %s.\n", skb->dev->name);
 		}
 		else
-			pr_warning("skb doesn't have valid dev.\n");
+			pr_warning("skb doesn't have valid dev.\n");*/
 
 		//打印skb的MAC地址
 		//pr_warning("skb->dev MAC: %pM",&mh->h_source);
 		if (!slave)
 		{
-			pr_info("%s doesn't exist! Goto out.\n", slave->dev->name);
+			pr_warning("%s doesn't exist! Goto out.\n", slave->dev->name);
 			goto out;
 		}
 
@@ -4243,7 +4252,9 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 			//}
 
 			res = bond_dev_queue_xmit(bond, skb, slave->dev); // modify: slave->dev
-			pr_warning("%s sends packets.\n", slave->dev->name);
+
+			// If sending is successful, keep silence
+			//pr_warning("%s sends packets.\n", slave->dev->name);
 
 			/*write_lock(&bond->curr_slave_lock);
 			 if (slave->next)
@@ -4255,7 +4266,8 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 		}
 		else
 		{
-			pr_info(
+			// If sending fails, warning!
+			pr_warning(
 					"== Slave %s is Not ready.Please check the wireless cards!\n",
 					slave->dev->name);
 		}
