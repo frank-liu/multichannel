@@ -4191,27 +4191,52 @@ static int bond_set_mac_address(struct net_device *bond_dev, void *addr)
 /*Throughput in roundrobin-mode needs to be tested under TCP*/
 /*
  * 1) All pkts are transmitted via wlan0
- * 2) Channel Detection to be added in this file, and cited in below function.
+ * 2) Channel Detection to be added in the near future, and may be cited in below function.
  */
 static int bond_xmit_roundrobin(struct sk_buff *skb,
 		struct net_device *bond_dev)
 {
 	struct bonding *bond = netdev_priv(bond_dev);
 	struct slave *slave;
-	int i, slave_no=0, res = 1;
+	int i, slave_no = 0, res = 1;
 	struct iphdr *iph = ip_hdr(skb);
-	//get mac address
-	//struct ethhdr *mh = eth_hdr(skb);
+
 	char * wlan0 = "wlan0";
-	char * wlan1 = "wlan1";
+
+	//get mac address, it can't be used here because of no contents in skb->mac
+	//struct ethhdr *mh = eth_hdr(skb);
 
 	/*bond->first_slave 对应 wlan0
 	 (bond->first_slave)->next 对应 wlan1*/
 
-	//specify wlan0 as a transmission slave
-	slave = bond->first_slave;
+	/*这个bond->lock锁似乎没用,对我们需求来说.
+	 read_lock(&bond->lock);
+	 slave = bond->first_slave;
+	 read_unlock(&bond->lock); */
 
-	/* Protocol values in the IP Header:
+	/*--Check if there is more than one slaves. And specify wlan0 as a transmission slave.--*/
+	if (bond->slave_cnt <= 1)
+	{
+		// less than 1 interface/slave
+		pr_info("No enough slaves. At least 2 slaves.\n");
+		goto out;
+	}
+	else
+	{	// more than 2 interfaces
+		// specify wlan0 as a transmission slave
+		bond_for_each_slave(bond, slave, i)
+		{
+			if (strcmp(slave->dev->name, wlan0)==0)
+				break;
+		}
+		if (strcmp(slave->dev->name, wlan0) != 0)
+			pr_warning("wlan0 is not found!");
+	}
+	/*--Check if there is more than one slaves. And specify wlan0 as a transmission slave.--*/
+
+
+	/* We can refer to below values of IP header for our application.
+	 Protocol values in the IP Header:
 	 IP		 	IPPROTO_IP 		0   % Dummy protocol for TCP
 	 ICMP 		IPPROTO_ICMP 	1
 	 IGMP 		IPPROTO_IGMP 	2
@@ -4224,7 +4249,6 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 	 Raw IP 	IPPROTO_RAW 	255
 	 More details: http://code.metager.de/source/xref/wireshark/epan/ipproto.h
 	 */
-
 	if (((iph->protocol == IPPROTO_IP) || (iph->protocol == IPPROTO_ICMP)
 			|| (iph->protocol == IPPROTO_TCP) || (iph->protocol == IPPROTO_UDP)
 			|| (iph->protocol == IPPROTO_RAW))
@@ -4244,47 +4268,55 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 			goto out;
 		}
 
-		if (SLAVE_IS_OK(slave)) //if (SLAVE_IS_OK(start))
+		//Check if slave wlan0 is ready
+		if (SLAVE_IS_OK(slave))
 		{
 			//	udelay(1000);//Wait 1 ms
-			res = bond_dev_queue_xmit(bond, skb, slave->dev); // modify: slave->dev
 
-			// If sending is successful, keep silence
-			slave_no = bond->rr_tx_counter++ % bond->slave_cnt;
+			if (strcmp(slave->dev->name, wlan0) == 0) //Check wlan0 again here.
+			{
+				res = bond_dev_queue_xmit(bond, skb, slave->dev);
 
+				// If sending is successful, keep silence
+				slave_no = bond->rr_tx_counter++ % bond->slave_cnt;
+			}
+			else
+				pr_warning("wlan0 is not found!");
 		}
+		// Slave wlan0 is not ready
 		else
 		{
 			// If sending fails, warning!
 			pr_warning(
-					"== Slave %s is Not ready.Please check the wireless cards!\n",
+					"Slave %s is Not ready.Please check the wireless cards!\n",
 					slave->dev->name);
 		}
 	}
+	/*For those pkts we aren't interested, send the pkts via all slaves alternatively*/
 	else
 	{
 		pr_info("== slave_no is %u.\n", slave_no);
 		bond_for_each_slave(bond, slave, i) // 选择第 slave_no 个slave，slave_no是从0开始编号的
 		{
-			slave_no--;
+			slave_no--; // After slave_no is decreased by 1, the ptr slave moves to the next slave.
 			if (slave_no < 0 && SLAVE_IS_OK(slave))
 			{
-				res = bond_dev_queue_xmit(bond, skb, slave->dev); // returns 0 for success
+				//Send out those pkts we aren't interested.
+				res = bond_dev_queue_xmit(bond, skb, slave->dev);
 				slave_no = bond->rr_tx_counter++ % bond->slave_cnt; //Update slave_no
-				break; // If it jumps out, we can be sure that the slave is ready to send pkts.
+				break;
 			}
 		}
 	}
 
+	// 'res' is equal to 0 for success, otherwise for failure.
 	out: if (res)
 	{
-		/* no suitable interface, frame not sent */
-		pr_info("== Can't find a suitable interface, free the skb.\n");
+		/* No suitable interface, don't send out pkts. Free the skb.*/
 		dev_kfree_skb(skb);
-		pr_info("== The skb has been freed.\n");
+		pr_info(" No suitable slave/interface, free the skb.\n");
 	}
-	//read_unlock(&bond->curr_slave_lock);
-	//read_unlock(&bond->lock);
+
 	return NETDEV_TX_OK;
 }
 
@@ -4717,7 +4749,7 @@ static void bond_uninit(struct net_device *bond_dev)
 	__hw_addr_flush(&bond->mc_list);
 
 	list_for_each_entry_safe(vlan, tmp, &bond->vlan_list, vlan_list)
-{list_del(&vlan->vlan_list);
+{ list_del(&vlan->vlan_list);
 kfree(vlan);
 }
 }
@@ -5246,7 +5278,8 @@ int bond_create(struct net *net, const char *name)
 	return res;
 }
 
-static int __net_init bond_net_init(struct net *net)
+static int __net_init
+bond_net_init(struct net *net)
 {
 	struct bond_net *bn = net_generic(net, bond_net_id);
 
@@ -5258,7 +5291,8 @@ static int __net_init bond_net_init(struct net *net)
 	return 0;
 }
 
-static void __net_exit bond_net_exit(struct net *net)
+static void __net_exit
+bond_net_exit(struct net *net)
 {
 	struct bond_net *bn = net_generic(net, bond_net_id);
 
@@ -5269,7 +5303,8 @@ static struct pernet_operations bond_net_ops =
 { .init = bond_net_init, .exit = bond_net_exit, .id = &bond_net_id, .size =
 		sizeof(struct bond_net), };
 
-static int __init bonding_init(void)
+static int __init
+bonding_init(void)
 {
 	int i;
 	int res;
@@ -5278,15 +5313,15 @@ static int __init bonding_init(void)
 
 	res = bond_check_params(&bonding_defaults);
 	if (res)
-	goto out;
+		goto out;
 
 	res = register_pernet_subsys(&bond_net_ops);
 	if (res)
-	goto out;
+		goto out;
 
 	res = rtnl_link_register(&bond_link_ops);
 	if (res)
-	goto err_link;
+		goto err_link;
 
 	bond_create_debugfs();
 
@@ -5294,45 +5329,42 @@ static int __init bonding_init(void)
 	{
 		res = bond_create(&init_net, NULL);
 		if (res)
-		goto err;
+			goto err;
 	}
 
 	res = bond_create_sysfs();
 	if (res)
-	goto err;
+		goto err;
 
 	register_netdevice_notifier(&bond_netdev_notifier);
 	register_inetaddr_notifier(&bond_inetaddr_notifier);
-	out:
-	return res;
-	err:
-	rtnl_link_unregister(&bond_link_ops);
-	err_link:
-	unregister_pernet_subsys(&bond_net_ops);
+	out: return res;
+	err: rtnl_link_unregister(&bond_link_ops);
+	err_link: unregister_pernet_subsys(&bond_net_ops);
 	goto out;
 
 }
 
 static void __exit bonding_exit(void)
-{
-	unregister_netdevice_notifier(&bond_netdev_notifier);
-	unregister_inetaddr_notifier(&bond_inetaddr_notifier);
+	{
+		unregister_netdevice_notifier(&bond_netdev_notifier);
+		unregister_inetaddr_notifier(&bond_inetaddr_notifier);
 
-	bond_destroy_sysfs();
-	bond_destroy_debugfs();
+		bond_destroy_sysfs();
+		bond_destroy_debugfs();
 
-	rtnl_link_unregister(&bond_link_ops);
-	unregister_pernet_subsys(&bond_net_ops);
+		rtnl_link_unregister(&bond_link_ops);
+		unregister_pernet_subsys(&bond_net_ops);
 
 #ifdef CONFIG_NET_POLL_CONTROLLER
-	/*
-	 * Make sure we don't have an imbalance on our netpoll blocking
-	 */
-	WARN_ON(atomic_read(&netpoll_block_tx));
+		/*
+		 * Make sure we don't have an imbalance on our netpoll blocking
+		 */
+		WARN_ON(atomic_read(&netpoll_block_tx));
 #endif
-}
+	}
 
-module_init( bonding_init);
+	module_init( bonding_init);
 module_exit( bonding_exit);
 MODULE_LICENSE("GPL");
 MODULE_VERSION(DRV_VERSION);
