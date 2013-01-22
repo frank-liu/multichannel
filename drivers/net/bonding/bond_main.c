@@ -4198,42 +4198,45 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 {
 	struct bonding *bond = netdev_priv(bond_dev);
 	struct slave *slave;
-	int i, slave_no, res = 1; //pkt_size=1000;
+	int i, slave_no=0, res = 1;
 	struct iphdr *iph = ip_hdr(skb);
 	//get mac address
 	//struct ethhdr *mh = eth_hdr(skb);
 	char * wlan0 = "wlan0";
 	char * wlan1 = "wlan1";
-	//struct slave *start_at = bond->first_slave; //lp wlan0
-	//struct slave *start_at; //lp wlan0
-	//struct slave *start_at = (bond->first_slave)->next; //lp wlan1
+
+	/*bond->first_slave 对应 wlan0
+	 (bond->first_slave)->next 对应 wlan1*/
 
 	//specify wlan0 as a transmission slave
 	slave = bond->first_slave;
 
-	if (iph->protocol >= 0) // test with ping, 128
+	/* Protocol values in the IP Header:
+	 IP		 	IPPROTO_IP 		0   % Dummy protocol for TCP
+	 ICMP 		IPPROTO_ICMP 	1
+	 IGMP 		IPPROTO_IGMP 	2
+	 Gateway 	IPPROTO_GGP 	3
+	 TCP 		IPPROTO_TCP 	6
+	 PUP 		IPPROTO_PUP 	12
+	 UDP 		IPPROTO_UDP 	17
+	 XND IDP 	IPPROTO_IDP 	22
+	 Net Disk 	IPPROTO_ND 		77
+	 Raw IP 	IPPROTO_RAW 	255
+	 More details: http://code.metager.de/source/xref/wireshark/epan/ipproto.h
+	 */
+
+	if (((iph->protocol == IPPROTO_IP) || (iph->protocol == IPPROTO_ICMP)
+			|| (iph->protocol == IPPROTO_TCP) || (iph->protocol == IPPROTO_UDP)
+			|| (iph->protocol == IPPROTO_RAW))
+			&& (skb->protocol == htons(ETH_P_IP)))
 	{
 		//read_lock(&bond->lock); dev = dev_get_by_name(&init_net, wlan1);
 		/*
-		 * skb->dev是bond0，当skb传送给bond_dev_queue_xmit后，被赋值成slave->dev
+		 * skb->dev是bond0，当skb传送给bond_dev_queue_xmit后，skb->dev被赋值成slave->dev
 		 * 这也就是为什么bond_dev_queue_xmit(bond, skb, slave->dev)要传入slave->dev的道理.
 		 */
 
-//This below if/else statments are not helpful for now.
-/*		if(skb->dev)
-		{
-			if (strcmp(skb->dev->name, wlan0) == 0)
-				slave = bond->first_slave->next;
-
-			else if (strcmp(skb->dev->name, wlan1) == 0)
-				slave = bond->first_slave;
-			pr_warning("slave = %s.\n", slave->dev->name);
-			pr_warning("skb->dev = %s.\n", skb->dev->name);
-		}
-		else
-			pr_warning("skb doesn't have valid dev.\n");*/
-
-		//打印skb的MAC地址
+		//打印skb的MAC地址语法：
 		//pr_warning("skb->dev MAC: %pM",&mh->h_source);
 		if (!slave)
 		{
@@ -4243,25 +4246,11 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 
 		if (SLAVE_IS_OK(slave)) //if (SLAVE_IS_OK(start))
 		{
-			//pr_info("== Slave %s is ready for transmit.\n", slave->dev->name);
-			//read_lock(&start_at->lock);
-			//bond->rr_tx_counter = bond->rr_tx_counter++ % (pkt_size+1);
-			//if (bond->rr_tx_counter == pkt_size)
-			//{
-			//	udelay(1000);//Wait a ms
-			//}
-
+			//	udelay(1000);//Wait 1 ms
 			res = bond_dev_queue_xmit(bond, skb, slave->dev); // modify: slave->dev
 
 			// If sending is successful, keep silence
-			//pr_warning("%s sends packets.\n", slave->dev->name);
-
-			/*write_lock(&bond->curr_slave_lock);
-			 if (slave->next)
-			 bond->curr_active_slave = slave->next;
-			 else
-			 bond->curr_active_slave = bond->first_slave;
-			 write_unlock(&bond->curr_slave_lock);*/
+			slave_no = bond->rr_tx_counter++ % bond->slave_cnt;
 
 		}
 		else
@@ -4271,22 +4260,19 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 					"== Slave %s is Not ready.Please check the wireless cards!\n",
 					slave->dev->name);
 		}
-
 	}
 	else
 	{
-		/*
-		 * Concurrent TX may collide on rr_tx_counter; we accept
-		 * that as being rare enough not to justify using an
-		 * atomic op here.
-		 */
-		slave_no = bond->rr_tx_counter++ % bond->slave_cnt;
 		pr_info("== slave_no is %u.\n", slave_no);
-		bond_for_each_slave(bond, slave, i) // 选择第 slave_no  个slave，slave_no是从0开始编号的
+		bond_for_each_slave(bond, slave, i) // 选择第 slave_no 个slave，slave_no是从0开始编号的
 		{
 			slave_no--;
-			if (slave_no < 0)
-				break;
+			if (slave_no < 0 && SLAVE_IS_OK(slave))
+			{
+				res = bond_dev_queue_xmit(bond, skb, slave->dev); // returns 0 for success
+				slave_no = bond->rr_tx_counter++ % bond->slave_cnt; //Update slave_no
+				break; // If it jumps out, we can be sure that the slave is ready to send pkts.
+			}
 		}
 	}
 
