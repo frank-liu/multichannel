@@ -6,13 +6,16 @@
  *      Email: frank.kingdom@gmail.com
  */
 
+#ifndef __SIGNAL_QUALITY_H__
+#define __SIGNAL_QUALITY_H__
 
-#include <sys/types.h>
-#include <sys/socket.h>
+
 #include <linux/wireless.h>
+#include </usr/include/sys/types.h>
+#include </usr/include/sys/socket.h>
 
-#include <stdio.h>
-#include <stdlib.h>
+#include </usr/include/stdio.h>
+#include </usr/include/stdlib.h>
 
 /* The name of the default interface. Not in use yet. */
 #ifndef IW_NAME
@@ -21,3 +24,6 @@
 
 // ================= Exported functions to the main bonding code ==================
 int signal_level(char *if_name);
+
+
+#endif //__SIGNAL_QUALITY_H__
