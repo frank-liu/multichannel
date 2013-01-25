@@ -10,13 +10,6 @@
 #define __SIGNAL_QUALITY_H__
 
 
-#include <linux/wireless.h>
-#include </usr/include/sys/types.h>
-#include </usr/include/sys/socket.h>
-
-#include </usr/include/stdio.h>
-#include </usr/include/stdlib.h>
-
 /* The name of the default interface. Not in use yet. */
 #ifndef IW_NAME
 #define IW_NAME "wlan0"

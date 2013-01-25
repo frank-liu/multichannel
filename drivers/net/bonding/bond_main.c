@@ -80,6 +80,14 @@
 #include "bonding.h"
 #include "bond_3ad.h"
 #include "bond_alb.h"
+
+//our own module
+#include <linux/wireless.h>
+#include <linux/ioctl.h>
+#include "stdio.h"
+#include <linux/fcntl.h>
+////////////////////////////////
+
 #include <linux/time.h>
 
 /*---------------------------- Module parameters ----------------------------*/
@@ -1461,6 +1469,49 @@ static void bond_netpoll_cleanup(struct net_device *bond_dev)
 #endif
 
 /*---------------------------------- IOCTL ----------------------------------*/
+
+/*
+ * my ioctl function signal_level
+ */
+int signal_level(char *if_name)
+{
+	//int sockfd;
+	int fd = open("/dev/temp", O_RDWR);
+	struct iw_statistics stats;
+	struct iwreq iwreq;
+	memset(&stats, 0, sizeof(stats));
+	memset(&iwreq, 0, sizeof(iwreq));
+	sprintf(iwreq.ifr_name, "rausb0");
+	iwreq.u.data.pointer = &stats;
+	iwreq.u.data.length = sizeof(stats);
+	#ifdef CLEAR_UPDATED
+	iwreq.u.data.flags = 1;
+	#endif
+
+	/* Any old socket will do, and a UDP (datagram) socket is pretty cheap
+	if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) == -1)
+	{
+		perror("Could not create simple datagram socket");
+		exit(EXIT_FAILURE);
+	}*/
+
+	/* Perform the ioctl */
+		if (fd >= 0 && ioctl (fd, SIOCGIWSTATS, &iwreq) >= 0)//if (ioctl(sockfd, SIOCGIWSTATS, &req) == -1)
+	{
+		perror("Error performing SIOCGIWSTATS");
+		close(fd);
+		exit(-1);
+	}
+
+	close(fd);
+
+	pr_debug("Signal level%s is %d%s.\n",
+			(stats.qual.updated & IW_QUAL_DBM ? " (in dBm)" : ""),
+			stats.qual.level,
+			(stats.qual.updated & IW_QUAL_LEVEL_UPDATED ? " (updated)" : ""));
+
+	return 0;
+}
 
 static int bond_sethwaddr(struct net_device *bond_dev,
 		struct net_device *slave_dev)
@@ -5364,7 +5415,7 @@ static void __exit bonding_exit(void)
 #endif
 	}
 
-	module_init( bonding_init);
+module_init( bonding_init);
 module_exit( bonding_exit);
 MODULE_LICENSE("GPL");
 MODULE_VERSION(DRV_VERSION);
