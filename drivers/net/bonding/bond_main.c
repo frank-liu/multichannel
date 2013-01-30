@@ -4276,13 +4276,7 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 		}
 	}
 
-	//----There are 3 ways to send packets----
-	//1) lp: alternately sending pkts between wlan0 and wlan1
-	//start_at = slave;
-	//2) lp: select only wlan0 to send pkts
-	//start_at = slave0;
-	//3) lp: select only wlan1 to send pkts
-	//start_at = slave1;
+
 
 	out: if (res)
 	{
