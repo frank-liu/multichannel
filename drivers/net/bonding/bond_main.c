@@ -4241,7 +4241,7 @@ static int bond_set_mac_address(struct net_device *bond_dev, void *addr)
 
 /*Throughput in roundrobin-mode needs to be tested under TCP*/
 /*
- * 1) All pkts are transmitted via wlan0
+ * 1) All pkts are transmitted via interface wlan0
  * 2) Channel Detection to be added in the near future, and may be cited in below function.
  */
 static int bond_xmit_roundrobin(struct sk_buff *skb,
