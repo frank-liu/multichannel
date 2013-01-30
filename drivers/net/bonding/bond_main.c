@@ -80,15 +80,12 @@
 #include "bonding.h"
 #include "bond_3ad.h"
 #include "bond_alb.h"
-
-//our own module
+//<Add> Frank; check the below headers
+#include <linux/fcntl.h>
 #include <linux/wireless.h>
 #include <linux/ioctl.h>
-#include "stdio.h"
-#include <linux/fcntl.h>
-////////////////////////////////
-
-#include <linux/time.h>
+//#include <net/iw_handler.h>
+//check over
 
 /*---------------------------- Module parameters ----------------------------*/
 
@@ -260,13 +257,13 @@ static void bond_uninit(struct net_device *bond_dev);
 const char *bond_mode_name(int mode)
 {
 	static const char *names[] =
-	{ [BOND_MODE_ROUNDROBIN] = "wlan0 transmission", [BOND_MODE_ACTIVEBACKUP
-			] = "fault-tolerance (active-backup)", [BOND_MODE_XOR
-			] = "load balancing (xor)", [BOND_MODE_BROADCAST
-			] = "fault-tolerance (broadcast)", [BOND_MODE_8023AD
-			] = "IEEE 802.3ad Dynamic link aggregation", [BOND_MODE_TLB
-			] = "transmit load balancing", [BOND_MODE_ALB
-			] = "adaptive load balancing", };
+	{ [BOND_MODE_ROUNDROBIN ] = "load balancing (round-robin)",
+			[BOND_MODE_ACTIVEBACKUP ] = "fault-tolerance (active-backup)",
+			[BOND_MODE_XOR ] = "load balancing (xor)", [BOND_MODE_BROADCAST
+					] = "fault-tolerance (broadcast)", [BOND_MODE_8023AD
+					] = "IEEE 802.3ad Dynamic link aggregation", [BOND_MODE_TLB
+					] = "transmit load balancing", [BOND_MODE_ALB
+					] = "adaptive load balancing", };
 
 	if (mode < 0 || mode > BOND_MODE_ALB)
 		return "unknown";
@@ -334,12 +331,13 @@ static int bond_del_vlan(struct bonding *bond, unsigned short vlan_id)
 			if (bond_is_lb(bond))
 			bond_alb_clear_vlan(bond, vlan_id);
 
-			pr_debug("removed VLAN ID %d from bond %s\n", vlan_id,
-					bond->dev->name);
+			pr_debug("removed VLAN ID %d from bond %s\n",
+					vlan_id, bond->dev->name);
 
 			kfree(vlan);
 
-			if (list_empty(&bond->vlan_list) && (bond->slave_cnt == 0))
+			if (list_empty(&bond->vlan_list) &&
+					(bond->slave_cnt == 0))
 			{
 				/* Last VLAN removed and no slaves, so
 				 * restore block on adding VLANs. This will
@@ -356,7 +354,8 @@ static int bond_del_vlan(struct bonding *bond, unsigned short vlan_id)
 
 	pr_debug("couldn't find VLAN ID %d in bond %s\n", vlan_id, bond->dev->name);
 
-	out: write_unlock_bh(&bond->lock);
+	out:
+	write_unlock_bh(&bond->lock);
 	unblock_netpoll_tx();
 	return res;
 }
@@ -764,6 +763,73 @@ static int bond_check_dev_link(struct bonding *bond,
 	return reporting ? -1 : BMSR_LSTATUS;
 }
 
+/*
+ * <Add> Frank LIU , Get frequencey
+ */
+static inline iw_handler get_handler(struct net_device *dev, unsigned int cmd)
+{
+	/* Don't "optimise" the following variable, it will crash */
+	unsigned int index; /* *MUST* be unsigned */
+
+	/* Check if we have some wireless handlers defined */
+	if (dev->wireless_handlers == NULL)
+		return NULL;
+
+	/* Try as a standard command */
+	index = cmd - SIOCIWFIRST;
+	if (index < dev->wireless_handlers->num_standard)
+		return dev->wireless_handlers->standard[index];
+
+	/* Try as a private command */
+	index = cmd - SIOCIWFIRSTPRIV;
+	if (index < dev->wireless_handlers->num_private)
+		return dev->wireless_handlers->private[index];
+
+	/* Not found */
+	return NULL;
+}
+
+/* From net80211/ieee80211.c in madwifi code */
+static u_int mhz2ieee(u_int freq)
+{
+	if (freq == 2484)
+		return 14;
+	if (freq < 2484) /* 2Ghz Band */
+		return (freq - 2407) / 5;
+	if (freq < 5000) /* 5Ghz Band */
+		return 15 + ((freq - 2512) / 20);
+	return (freq - 5000) / 5; /* XXX: What's this?*/
+}
+/*static int get_slave_dev_freq(struct net_device *bond_dev)
+ {
+ struct bonding *bond = netdev_priv(bond_dev);
+ struct slave *slave = bond->first_slave;
+ struct net_device *slave_dev = slave->dev;
+ static int (*ioctl)(struct net_device *, struct ifreq *, int);
+ struct ifreq ifr;
+ //bond_dev->do_ioctl = bond_do_ioctl;
+ ioctl = bond_do_ioctl; //slave_dev->do_ioctl;
+
+ strncpy(ifr.ifr_name, slave_dev->name, IFNAMSIZ);
+
+ if (!ioctl || (IOCTL(slave_dev, &ifr, SIOCGIWFREQ) < 0))
+ {
+ return -1;
+ }
+ else
+ {
+ struct iwreq *wrq = (struct iwreq *) ifr;
+ if (wrq->u.freq.m > 14)
+ pr_warning("Slave device %s working on freqency %d.\n",
+ ifr.ifr_ifrn.ifrn_name, wrq->u.freq.m / 100000);
+ else
+ pr_warning("Slave device %s working on Channel %d.\n",
+ ifr.ifr_ifrn.ifrn_name, wrq->u.freq.m);
+ }
+ return 1;
+
+ }*/
+
 /*----------------------------- Multicast list ------------------------------*/
 
 /*
@@ -897,7 +963,8 @@ static void bond_resend_igmp_join_requests(struct bonding *bond)
 	if (bond->vlgrp)
 	{
 		list_for_each_entry(vlan, &bond->vlan_list, vlan_list)
-{	vlan_dev = vlan_group_get_device(bond->vlgrp, vlan->vlan_id);
+{	vlan_dev = vlan_group_get_device(bond->vlgrp,
+			vlan->vlan_id);
 	if (vlan_dev)
 	__bond_resend_igmp_join_requests(vlan_dev);
 }
@@ -1468,50 +1535,7 @@ static void bond_netpoll_cleanup(struct net_device *bond_dev)
 }
 #endif
 
-/*---------------------------------- IOCTL ----------------------------------*/
-
-/*
- * my ioctl function signal_level
- */
-int signal_level(char *if_name)
-{
-	//int sockfd;
-	int fd = open("/dev/temp", O_RDWR);
-	struct iw_statistics stats;
-	struct iwreq iwreq;
-	memset(&stats, 0, sizeof(stats));
-	memset(&iwreq, 0, sizeof(iwreq));
-	sprintf(iwreq.ifr_name, "rausb0");
-	iwreq.u.data.pointer = &stats;
-	iwreq.u.data.length = sizeof(stats);
-	#ifdef CLEAR_UPDATED
-	iwreq.u.data.flags = 1;
-	#endif
-
-	/* Any old socket will do, and a UDP (datagram) socket is pretty cheap
-	if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) == -1)
-	{
-		perror("Could not create simple datagram socket");
-		exit(EXIT_FAILURE);
-	}*/
-
-	/* Perform the ioctl */
-		if (fd >= 0 && ioctl (fd, SIOCGIWSTATS, &iwreq) >= 0)//if (ioctl(sockfd, SIOCGIWSTATS, &req) == -1)
-	{
-		perror("Error performing SIOCGIWSTATS");
-		close(fd);
-		exit(-1);
-	}
-
-	close(fd);
-
-	pr_debug("Signal level%s is %d%s.\n",
-			(stats.qual.updated & IW_QUAL_DBM ? " (in dBm)" : ""),
-			stats.qual.level,
-			(stats.qual.updated & IW_QUAL_LEVEL_UPDATED ? " (updated)" : ""));
-
-	return 0;
-}
+/*----------------------------------IOCTL----------------------------------*/
 
 static int bond_sethwaddr(struct net_device *bond_dev,
 		struct net_device *slave_dev)
@@ -1549,7 +1573,8 @@ static u32 bond_fix_features(struct net_device *dev, u32 features)
 				mask);
 	}
 
-	out: read_unlock(&bond->lock);
+	out:
+	read_unlock(&bond->lock);
 	return features;
 }
 
@@ -2461,7 +2486,8 @@ static int bond_release_all(struct net_device *bond_dev)
 
 	pr_info("%s: released all slaves\n", bond_dev->name);
 
-	out: write_unlock_bh(&bond->lock);
+	out:
+	write_unlock_bh(&bond->lock);
 
 	bond_compute_features(bond);
 
@@ -2814,7 +2840,8 @@ void bond_mii_monitor(struct work_struct *work)
 	re_arm: if (bond->params.miimon)
 		queue_delayed_work(bond->wq, &bond->mii_work,
 				msecs_to_jiffies(bond->params.miimon));
-	out: read_unlock(&bond->lock);
+	out:
+	read_unlock(&bond->lock);
 
 	if (should_notify_peers)
 	{
@@ -2952,8 +2979,8 @@ static void bond_arp_send_all(struct bonding *bond, struct slave *slave)
 			if (vlan_dev == rt->dst.dev)
 			{
 				vlan_id = vlan->vlan_id;
-				pr_debug("basa: vlan match on %s %d\n", vlan_dev->name,
-						vlan_id);
+				pr_debug("basa: vlan match on %s %d\n",
+						vlan_dev->name, vlan_id);
 				break;
 			}
 		}
@@ -3044,7 +3071,8 @@ static void bond_arp_rcv(struct sk_buff *skb, struct bonding *bond,
 	else
 		bond_validate_arp(bond, slave, tip, sip);
 
-	out_unlock: read_unlock(&bond->lock);
+	out_unlock:
+	read_unlock(&bond->lock);
 }
 
 /*
@@ -3091,7 +3119,8 @@ void bond_loadbalance_arp_mon(struct work_struct *work)
 
 		if (slave->link != BOND_LINK_UP)
 		{
-			if (time_in_range(jiffies, trans_start - delta_in_ticks,
+			if (time_in_range(jiffies,
+					trans_start - delta_in_ticks,
 					trans_start + delta_in_ticks) && time_in_range(jiffies,
 					slave->dev->last_rx - delta_in_ticks,
 					slave->dev->last_rx + delta_in_ticks))
@@ -3126,7 +3155,8 @@ void bond_loadbalance_arp_mon(struct work_struct *work)
 			 * when the source ip is 0, so don't take the link down
 			 * if we don't know our ip yet
 			 */
-			if (!time_in_range(jiffies, trans_start - delta_in_ticks,
+			if (!time_in_range(jiffies,
+					trans_start - delta_in_ticks,
 					trans_start + 2 * delta_in_ticks) || !time_in_range(jiffies,
 					slave->dev->last_rx - delta_in_ticks,
 					slave->dev->last_rx + 2 * delta_in_ticks))
@@ -3170,7 +3200,8 @@ void bond_loadbalance_arp_mon(struct work_struct *work)
 
 	re_arm: if (bond->params.arp_interval)
 		queue_delayed_work(bond->wq, &bond->arp_work, delta_in_ticks);
-	out: read_unlock(&bond->lock);
+	out:
+	read_unlock(&bond->lock);
 }
 
 /*
@@ -3210,7 +3241,8 @@ static int bond_ab_arp_inspect(struct bonding *bond, int delta_in_ticks)
 		 * active.  This avoids bouncing, as the last receive
 		 * times need a full ARP monitor cycle to be updated.
 		 */
-		if (time_in_range(jiffies, slave->jiffies - delta_in_ticks,
+		if (time_in_range(jiffies,
+				slave->jiffies - delta_in_ticks,
 				slave->jiffies + 2 * delta_in_ticks))
 			continue;
 
@@ -3227,12 +3259,14 @@ static int bond_ab_arp_inspect(struct bonding *bond, int delta_in_ticks)
 		 * gives each slave a chance to tx/rx traffic
 		 * before being taken out
 		 */
-		if (!bond_is_active_slave(slave) && !bond->current_arp_slave
-		&& !time_in_range(jiffies,
+		if (!bond_is_active_slave(slave) &&
+		!bond->current_arp_slave &&
+		!time_in_range(jiffies,
 				slave_last_rx(bond, slave) - delta_in_ticks,
 				slave_last_rx(bond, slave) + 3 * delta_in_ticks)){
 
-slave		->new_link = BOND_LINK_DOWN;
+slave		->new_link
+		= BOND_LINK_DOWN;
 		commit++;
 	}
 
@@ -3243,12 +3277,11 @@ slave		->new_link = BOND_LINK_DOWN;
 		 *    the bond has an IP address)
 		 */
 		trans_start = dev_trans_start(slave->dev);
-		if (bond_is_active_slave(slave)
-				&& (!time_in_range(jiffies, trans_start - delta_in_ticks,
-						trans_start + 2 * delta_in_ticks)
-						|| !time_in_range(jiffies,
-								slave_last_rx(bond, slave) - delta_in_ticks,
-								slave_last_rx(bond, slave) + 2 * delta_in_ticks)))
+		if (bond_is_active_slave(slave) && (!time_in_range(jiffies,
+				trans_start - delta_in_ticks,
+				trans_start + 2 * delta_in_ticks) || !time_in_range(jiffies,
+				slave_last_rx(bond, slave) - delta_in_ticks,
+				slave_last_rx(bond, slave) + 2 * delta_in_ticks)))
 		{
 
 			slave->new_link = BOND_LINK_DOWN;
@@ -3280,9 +3313,9 @@ static void bond_ab_arp_commit(struct bonding *bond, int delta_in_ticks)
 
 		case BOND_LINK_UP:
 			trans_start = dev_trans_start(slave->dev);
-			if ((!bond->curr_active_slave
-					&& time_in_range(jiffies, trans_start - delta_in_ticks,
-							trans_start + delta_in_ticks))
+			if ((!bond->curr_active_slave && time_in_range(jiffies,
+					trans_start - delta_in_ticks,
+					trans_start + delta_in_ticks))
 					|| bond->curr_active_slave != slave)
 			{
 				slave->link = BOND_LINK_UP;
@@ -3445,7 +3478,8 @@ void bond_activebackup_arp_mon(struct work_struct *work)
 
 	re_arm: if (bond->params.arp_interval)
 		queue_delayed_work(bond->wq, &bond->arp_work, delta_in_ticks);
-	out: read_unlock(&bond->lock);
+	out:
+	read_unlock(&bond->lock);
 
 	if (should_notify_peers)
 	{
@@ -3642,7 +3676,8 @@ static int bond_inetaddr_event(struct notifier_block *this, unsigned long event,
 					vlan->vlan_ip = ifa->ifa_local;
 					return NOTIFY_OK;
 					case NETDEV_DOWN:
-					vlan->vlan_ip = bond_glean_dev_ip(vlan_dev);
+					vlan->vlan_ip =
+					bond_glean_dev_ip(vlan_dev);
 					return NOTIFY_OK;
 					default:
 					return NOTIFY_DONE;
@@ -3877,12 +3912,11 @@ static int bond_do_ioctl(struct net_device *bond_dev, struct ifreq *ifr,
 {
 	struct net_device *slave_dev = NULL;
 	struct ifbond k_binfo;
-	struct ifbond __user
-	*u_binfo = NULL;
+	struct ifbond __user *u_binfo = NULL;
 	struct ifslave k_sinfo;
-	struct ifslave __user
-	*u_sinfo = NULL;
+	struct ifslave __user *u_sinfo = NULL;
 	struct mii_ioctl_data *mii = NULL;
+	//struct iwreq *wrq = (struct iwreq *) ifr; //added by frank.referring to device_ioctl();
 	int res = 0;
 
 	pr_debug("bond_ioctl: master=%s, cmd=%d\n", bond_dev->name, cmd);
@@ -3943,6 +3977,16 @@ static int bond_do_ioctl(struct net_device *bond_dev, struct ifreq *ifr,
 			return -EFAULT;
 
 		return res;
+
+		/*<Add> Frank, from /vt6655/device_main.c Line:3090*/
+		/*// Get frequency/channel
+		 case SIOCGIWFREQ:
+		 res = iwctl_giwfreq(dev, NULL, &(wrq->u.freq), NULL);
+		 break;
+		 // Set frequency/channel
+		 case SIOCSIWFREQ:
+		 res = iwctl_siwfreq(dev, NULL, &(wrq->u.freq), NULL);
+		 break;*/
 	default:
 		/* Go on */
 		break;
@@ -4239,11 +4283,6 @@ static int bond_set_mac_address(struct net_device *bond_dev, void *addr)
 	return res;
 }
 
-/*Throughput in roundrobin-mode needs to be tested under TCP*/
-/*
- * 1) All pkts are transmitted via interface wlan0
- * 2) Channel Detection to be added in the near future, and may be cited in below function.
- */
 static int bond_xmit_roundrobin(struct sk_buff *skb,
 		struct net_device *bond_dev)
 {
@@ -4251,6 +4290,10 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 	struct slave *slave;
 	int i, slave_no = 0, res = 1;
 	struct iphdr *iph = ip_hdr(skb);
+
+	struct iw_freq fr_get, fr_set; // wireless frequency data structure
+	u_int cur_chan; //current working channel
+	int ret = 1;
 
 	char * wlan0 = "wlan0";
 
@@ -4273,18 +4316,17 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 		goto out;
 	}
 	else
-	{	// more than 2 interfaces
-		// specify wlan0 as a transmission slave
+	{ // more than 2 interfaces
+	  // specify wlan0 as a transmission slave
 		bond_for_each_slave(bond, slave, i)
 		{
-			if (strcmp(slave->dev->name, wlan0)==0)
+			if (strcmp(slave->dev->name, wlan0) == 0)
 				break;
 		}
 		if (strcmp(slave->dev->name, wlan0) != 0)
 			pr_warning("wlan0 is not found!");
 	}
 	/*--Check if there is more than one slaves. And specify wlan0 as a transmission slave.--*/
-
 
 	/* We can refer to below values of IP header for our application.
 	 Protocol values in the IP Header:
@@ -4313,6 +4355,10 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 
 		//打印skb的MAC地址语法：
 		//pr_warning("skb->dev MAC: %pM",&mh->h_source);
+// Init handler
+		/* Get wireless channel get/set handlers */
+		slave->get_iwfreq = get_handler(slave->dev, SIOCGIWFREQ);
+		slave->set_iwfreq = get_handler(slave->dev, SIOCSIWFREQ);
 		if (!slave)
 		{
 			pr_warning("%s doesn't exist! Goto out.\n", slave->dev->name);
@@ -4327,6 +4373,26 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 			if (strcmp(slave->dev->name, wlan0) == 0) //Check wlan0 again here.
 			{
 				res = bond_dev_queue_xmit(bond, skb, slave->dev);
+
+//<Add> Frank LIU;
+				// Get wireless parameters
+				ret = slave->get_iwfreq(slave->dev, NULL,
+						(union iwreq_data *) &fr_get, NULL);
+				if (fr_get.e) //e=1
+					cur_chan = mhz2ieee(fr_get.m / 100000);
+				else
+					//e=0
+					cur_chan = fr_get.m;
+				pr_warning("current channel is %u\n", cur_chan);
+
+				/* Switch to the next channel now */
+				fr_set.m = ((__s32) cur_chan+1)%13;
+				fr_set.e = 0;
+				//set to next channel
+				ret = slave->set_iwfreq(slave->dev, NULL,
+						(union iwreq_data *) &fr_set, NULL);
+				pr_warning("Channel is changed to %d\n", fr_set.m);
+//<Add> frank over
 
 				// If sending is successful, keep silence
 				slave_no = bond->rr_tx_counter++ % bond->slave_cnt;
@@ -4800,7 +4866,7 @@ static void bond_uninit(struct net_device *bond_dev)
 	__hw_addr_flush(&bond->mc_list);
 
 	list_for_each_entry_safe(vlan, tmp, &bond->vlan_list, vlan_list)
-{ list_del(&vlan->vlan_list);
+{list_del(&vlan->vlan_list);
 kfree(vlan);
 }
 }
@@ -5329,8 +5395,7 @@ int bond_create(struct net *net, const char *name)
 	return res;
 }
 
-static int __net_init
-bond_net_init(struct net *net)
+static int __net_init bond_net_init(struct net *net)
 {
 	struct bond_net *bn = net_generic(net, bond_net_id);
 
@@ -5342,8 +5407,7 @@ bond_net_init(struct net *net)
 	return 0;
 }
 
-static void __net_exit
-bond_net_exit(struct net *net)
+static void __net_exit bond_net_exit(struct net *net)
 {
 	struct bond_net *bn = net_generic(net, bond_net_id);
 
@@ -5354,8 +5418,7 @@ static struct pernet_operations bond_net_ops =
 { .init = bond_net_init, .exit = bond_net_exit, .id = &bond_net_id, .size =
 		sizeof(struct bond_net), };
 
-static int __init
-bonding_init(void)
+static int __init bonding_init(void)
 {
 	int i;
 	int res;
@@ -5376,8 +5439,7 @@ bonding_init(void)
 
 	bond_create_debugfs();
 
-	for (i = 0; i < max_bonds; i++)
-	{
+	for (i = 0; i < max_bonds; i++) {
 		res = bond_create(&init_net, NULL);
 		if (res)
 			goto err;
@@ -5389,34 +5451,37 @@ bonding_init(void)
 
 	register_netdevice_notifier(&bond_netdev_notifier);
 	register_inetaddr_notifier(&bond_inetaddr_notifier);
-	out: return res;
-	err: rtnl_link_unregister(&bond_link_ops);
-	err_link: unregister_pernet_subsys(&bond_net_ops);
+out:
+	return res;
+err:
+	rtnl_link_unregister(&bond_link_ops);
+err_link:
+	unregister_pernet_subsys(&bond_net_ops);
 	goto out;
 
 }
 
 static void __exit bonding_exit(void)
-	{
-		unregister_netdevice_notifier(&bond_netdev_notifier);
-		unregister_inetaddr_notifier(&bond_inetaddr_notifier);
+{
+	unregister_netdevice_notifier(&bond_netdev_notifier);
+	unregister_inetaddr_notifier(&bond_inetaddr_notifier);
 
-		bond_destroy_sysfs();
-		bond_destroy_debugfs();
+	bond_destroy_sysfs();
+	bond_destroy_debugfs();
 
-		rtnl_link_unregister(&bond_link_ops);
-		unregister_pernet_subsys(&bond_net_ops);
+	rtnl_link_unregister(&bond_link_ops);
+	unregister_pernet_subsys(&bond_net_ops);
 
 #ifdef CONFIG_NET_POLL_CONTROLLER
-		/*
-		 * Make sure we don't have an imbalance on our netpoll blocking
-		 */
-		WARN_ON(atomic_read(&netpoll_block_tx));
+	/*
+	 * Make sure we don't have an imbalance on our netpoll blocking
+	 */
+	WARN_ON(atomic_read(&netpoll_block_tx));
 #endif
-	}
+}
 
-module_init( bonding_init);
-module_exit( bonding_exit);
+module_init(bonding_init);
+module_exit(bonding_exit);
 MODULE_LICENSE("GPL");
 MODULE_VERSION(DRV_VERSION);
 MODULE_DESCRIPTION(DRV_DESCRIPTION ", v" DRV_VERSION);
