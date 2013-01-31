@@ -4391,7 +4391,7 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 				pr_warning("current channel is %u\n", cur_chan);
 
 				/* Switch to the next channel now */
-				fr_set.m = ((__s32) cur_chan+1)% MAXCHANNELS;
+				fr_set.m = ((__s32) cur_chan % MAXCHANNELS) +1;
 				fr_set.e = 0;
 				//set to next channel
 				ret = slave->set_iwfreq(slave->dev, NULL,
@@ -4440,7 +4440,7 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 		pr_info(" No suitable slave/interface, free the skb.\n");
 	}
 
-	if (bond->rr_tx_counter >=65536)
+	if (bond->rr_tx_counter == 0xFFFF)
 		bond->rr_tx_counter = 0;// if bond->rr_tx_counter overflows, clear it.
 	return NETDEV_TX_OK;
 }
