@@ -719,11 +719,11 @@ struct	iw_freq
 };
 
 /*
- *	Quality of the link
+ *	Quality of the link 定义了统计信息中关于连接质量的相关参数
  */
 struct	iw_quality
 {
-	__u8		qual;		/* link quality (%retries, SNR,
+	__u8		qual;		/*无线信号连接质量 link quality (%retries, SNR,
 					   %missed beacons or better...) */
 	__u8		level;		/* signal level (dBm) */
 	__u8		noise;		/* noise level (dBm) */
