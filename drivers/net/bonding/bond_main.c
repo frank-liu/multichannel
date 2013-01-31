@@ -4308,11 +4308,11 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 	 slave = bond->first_slave;
 	 read_unlock(&bond->lock); */
 
-	/*--Check if there is more than one slaves. And specify wlan0 as a transmission slave.--*/
+	/*--Check Sanity: if there is more than 2 slaves. If yes, specify wlan0 as a transmission slave.--*/
 	if (bond->slave_cnt <= 1)
 	{
 		// less than 1 interface/slave
-		pr_info("No enough slaves. At least 2 slaves.\n");
+		pr_info("No enough slaves. At least 2 slaves!\n");
 		goto out;
 	}
 	else
@@ -4321,8 +4321,9 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 		bond_for_each_slave(bond, slave, i)
 		{
 			if (strcmp(slave->dev->name, wlan0) == 0)
-				break;
+				break;//跳出后，指针slave指向wlan0这个slave
 		}
+		/*如果找了一圈没找到slave wlan0，打印警告信息。*/
 		if (strcmp(slave->dev->name, wlan0) != 0)
 			pr_warning("wlan0 is not found!");
 	}
@@ -4355,52 +4356,56 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 
 		//打印skb的MAC地址语法：
 		//pr_warning("skb->dev MAC: %pM",&mh->h_source);
-// Init handler
+
+		/* Init handler */
 		/* Get wireless channel get/set handlers */
 		slave->get_iwfreq = get_handler(slave->dev, SIOCGIWFREQ);
 		slave->set_iwfreq = get_handler(slave->dev, SIOCSIWFREQ);
+
 		if (!slave)
 		{
 			pr_warning("%s doesn't exist! Goto out.\n", slave->dev->name);
 			goto out;
 		}
 
-		//Check if slave wlan0 is ready
+		//Check if slave wlan0 is ready，if yes:
 		if (SLAVE_IS_OK(slave))
 		{
 			//	udelay(1000);//Wait 1 ms
 
-			if (strcmp(slave->dev->name, wlan0) == 0) //Check wlan0 again here.
+			if (strcmp(slave->dev->name, wlan0) == 0) //Check if the slave is wlan0 once again.
 			{
 				res = bond_dev_queue_xmit(bond, skb, slave->dev);
 
-//<Add> Frank LIU;
+				/*<Add> Frank LIU;*/
 				// Get wireless parameters
 				ret = slave->get_iwfreq(slave->dev, NULL,
 						(union iwreq_data *) &fr_get, NULL);
-				if (fr_get.e) //e=1
-					cur_chan = mhz2ieee(fr_get.m / 100000);
-				else
-					//e=0
+
+				if (fr_get.e) //if e=1,that means 'cur_chan' is in MHz.
+					cur_chan = mhz2ieee(fr_get.m / 100000); // so we convert it to channel index here.
+				else //if e=0, that means 'cur_chan' is expressed in channel index.
 					cur_chan = fr_get.m;
+
+				//调试用，用后删除
 				pr_warning("current channel is %u\n", cur_chan);
 
 				/* Switch to the next channel now */
-				fr_set.m = ((__s32) cur_chan+1)%13;
+				fr_set.m = ((__s32) cur_chan+1)% MAXCHANNELS;
 				fr_set.e = 0;
 				//set to next channel
 				ret = slave->set_iwfreq(slave->dev, NULL,
 						(union iwreq_data *) &fr_set, NULL);
 				pr_warning("Channel is changed to %d\n", fr_set.m);
-//<Add> frank over
+				//<Add> frank over
 
 				// If sending is successful, keep silence
 				slave_no = bond->rr_tx_counter++ % bond->slave_cnt;
 			}
-			else
+			else // if didn't find wlan0.
 				pr_warning("wlan0 is not found!");
 		}
-		// Slave wlan0 is not ready
+		// If sending fails : Slave wlan0 is not ready
 		else
 		{
 			// If sending fails, warning!
@@ -4412,7 +4417,7 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 	/*For those pkts we aren't interested, send the pkts via all slaves alternatively*/
 	else
 	{
-		pr_info("== slave_no is %u.\n", slave_no);
+		pr_info("slave wlan%u is selected to send the pkts we aren't interested.\n", slave_no);
 		bond_for_each_slave(bond, slave, i) // 选择第 slave_no 个slave，slave_no是从0开始编号的
 		{
 			slave_no--; // After slave_no is decreased by 1, the ptr slave moves to the next slave.
@@ -4420,6 +4425,7 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 			{
 				//Send out those pkts we aren't interested.
 				res = bond_dev_queue_xmit(bond, skb, slave->dev);
+				pr_info("slave wlan%u is selected to send the pkts we aren't interested.\n", slave_no);
 				slave_no = bond->rr_tx_counter++ % bond->slave_cnt; //Update slave_no
 				break;
 			}
@@ -4434,6 +4440,8 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 		pr_info(" No suitable slave/interface, free the skb.\n");
 	}
 
+	if (bond->rr_tx_counter >=65536)
+		bond->rr_tx_counter = 0;// if bond->rr_tx_counter overflows, clear it.
 	return NETDEV_TX_OK;
 }
 
