@@ -4351,7 +4351,7 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 	if (((iph->protocol == IPPROTO_IP) || (iph->protocol == 128)
 			|| (iph->protocol == IPPROTO_ICMP) || (iph->protocol == IPPROTO_TCP)
 			|| (iph->protocol == IPPROTO_UDP) || (iph->protocol == IPPROTO_RAW))
-			&& (skb->protocol == htons(ETH_P_IP)))
+			)//&& (skb->protocol == htons(ETH_P_IP)))
 	{
 		//read_lock(&bond->lock); dev = dev_get_by_name(&init_net, wlan1);
 		/*
