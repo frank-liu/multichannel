@@ -773,8 +773,10 @@ static inline iw_handler get_handler(struct net_device *dev, unsigned int cmd)
 
 	/* Check if we have some wireless handlers defined */
 	if (dev->wireless_handlers == NULL)
+	{
+		pr_info("dev->wireless_handlers is NULL.\n");
 		return NULL;
-
+	}
 	/* Try as a standard command */
 	index = cmd - SIOCIWFIRST;
 	if (index < dev->wireless_handlers->num_standard)
@@ -4365,7 +4367,7 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 		/* Get wireless channel get/set handlers */
 		slave->get_iwfreq = get_handler(slave->dev, SIOCGIWFREQ);
 		slave->set_iwfreq = get_handler(slave->dev, SIOCSIWFREQ);
-
+		pr_info("Init handler finished.\n");
 		if (!slave)
 		{
 			pr_warning("%s doesn't exist! Goto out.\n", slave->dev->name);
@@ -4383,6 +4385,7 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 
 				/*<Add> Frank LIU;*/
 				// Get wireless parameters
+				pr_warning("Getting channel...\n");
 				ret = slave->get_iwfreq(slave->dev, NULL,
 						(union iwreq_data *) &fr_get, NULL);
 
@@ -4424,7 +4427,7 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 	else
 	{
 		pr_info(
-				"slave wlan%u is selected to send the pkts we aren't interested.\n",
+				"slave wlan%d is now selected to send the pkts we aren't interested.\n",
 				slave_no);
 		bond_for_each_slave(bond, slave, i) // 选择第 slave_no 个slave，slave_no是从0开始编号的
 		{
@@ -4434,8 +4437,8 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 				//Send out those pkts we aren't interested.
 				res = bond_dev_queue_xmit(bond, skb, slave->dev);
 				pr_info(
-						"slave wlan%d is selected to send the pkts we aren't interested.\n",
-						slave_no);
+						"slave %s is selected to send the pkts we aren't interested.\n",
+						slave->dev);
 				slave_no = bond->rr_tx_counter++ % bond->slave_cnt; //Update slave_no
 				break;
 			}
