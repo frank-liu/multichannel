@@ -4434,7 +4434,7 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 				//Send out those pkts we aren't interested.
 				res = bond_dev_queue_xmit(bond, skb, slave->dev);
 				pr_info(
-						"slave wlan%u is selected to send the pkts we aren't interested.\n",
+						"slave wlan%d is selected to send the pkts we aren't interested.\n",
 						slave_no);
 				slave_no = bond->rr_tx_counter++ % bond->slave_cnt; //Update slave_no
 				break;
