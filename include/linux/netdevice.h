@@ -74,6 +74,7 @@ struct wireless_dev;
 /* Backlog congestion levels */
 #define NET_RX_SUCCESS		0	/* keep 'em coming, baby */
 #define NET_RX_DROP		1	/* packet dropped */
+#define CONFIG_WIRELESS_EXT /*Add Frank. for iw_handler error.*/
 
 /*
  * Transmit return codes: transmit return codes originate from three different
