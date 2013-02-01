@@ -4321,7 +4321,7 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 		bond_for_each_slave(bond, slave, i)
 		{
 			if (strcmp(slave->dev->name, wlan0) == 0)
-				break;//跳出后，指针slave指向wlan0这个slave
+				break; //跳出后，指针slave指向wlan0这个slave
 		}
 		/*如果找了一圈没找到slave wlan0，打印警告信息。*/
 		if (strcmp(slave->dev->name, wlan0) != 0)
@@ -4340,12 +4340,17 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 	 UDP 		IPPROTO_UDP 	17
 	 XND IDP 	IPPROTO_IDP 	22
 	 Net Disk 	IPPROTO_ND 		77
+	 IP_PROTO_SSCOPMCE      	128  //ping test
 	 Raw IP 	IPPROTO_RAW 	255
 	 More details: http://code.metager.de/source/xref/wireshark/epan/ipproto.h
 	 */
-	if (((iph->protocol == IPPROTO_IP) || (iph->protocol == IPPROTO_ICMP)
-			|| (iph->protocol == IPPROTO_TCP) || (iph->protocol == IPPROTO_UDP)
-			|| (iph->protocol == IPPROTO_RAW))
+	//for debug. delete it after use
+	if (skb->protocol != htons(ETH_P_IP))
+		pr_warning(" skb->protocol != htons(ETH_P_IP) \n");
+
+	if (((iph->protocol == IPPROTO_IP) || (iph->protocol == 128)
+			|| (iph->protocol == IPPROTO_ICMP) || (iph->protocol == IPPROTO_TCP)
+			|| (iph->protocol == IPPROTO_UDP) || (iph->protocol == IPPROTO_RAW))
 			&& (skb->protocol == htons(ETH_P_IP)))
 	{
 		//read_lock(&bond->lock); dev = dev_get_by_name(&init_net, wlan1);
@@ -4356,7 +4361,6 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 
 		//打印skb的MAC地址语法：
 		//pr_warning("skb->dev MAC: %pM",&mh->h_source);
-
 		/* Init handler */
 		/* Get wireless channel get/set handlers */
 		slave->get_iwfreq = get_handler(slave->dev, SIOCGIWFREQ);
@@ -4382,9 +4386,10 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 				ret = slave->get_iwfreq(slave->dev, NULL,
 						(union iwreq_data *) &fr_get, NULL);
 
-				if (fr_get.e) //if e=1,that means 'cur_chan' is in MHz.
+				if (fr_get.e) //if e=1,that means 'cur_chan' is in MHz.当01000时，它表示频率，单位HZ
 					cur_chan = mhz2ieee(fr_get.m / 100000); // so we convert it to channel index here.
-				else //if e=0, that means 'cur_chan' is expressed in channel index.
+				else
+					//if e=0, that means 'cur_chan' is expressed in channel index.
 					cur_chan = fr_get.m;
 
 				//调试用，用后删除
@@ -4402,7 +4407,8 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 				// If sending is successful, keep silence
 				slave_no = bond->rr_tx_counter++ % bond->slave_cnt;
 			}
-			else // if didn't find wlan0.
+			else
+				// if didn't find wlan0.
 				pr_warning("wlan0 is not found!");
 		}
 		// If sending fails : Slave wlan0 is not ready
@@ -4417,7 +4423,9 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 	/*For those pkts we aren't interested, send the pkts via all slaves alternatively*/
 	else
 	{
-		pr_info("slave wlan%u is selected to send the pkts we aren't interested.\n", slave_no);
+		pr_info(
+				"slave wlan%u is selected to send the pkts we aren't interested.\n",
+				slave_no);
 		bond_for_each_slave(bond, slave, i) // 选择第 slave_no 个slave，slave_no是从0开始编号的
 		{
 			slave_no--; // After slave_no is decreased by 1, the ptr slave moves to the next slave.
@@ -4425,7 +4433,9 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 			{
 				//Send out those pkts we aren't interested.
 				res = bond_dev_queue_xmit(bond, skb, slave->dev);
-				pr_info("slave wlan%u is selected to send the pkts we aren't interested.\n", slave_no);
+				pr_info(
+						"slave wlan%u is selected to send the pkts we aren't interested.\n",
+						slave_no);
 				slave_no = bond->rr_tx_counter++ % bond->slave_cnt; //Update slave_no
 				break;
 			}
@@ -4441,7 +4451,7 @@ static int bond_xmit_roundrobin(struct sk_buff *skb,
 	}
 
 	if (bond->rr_tx_counter == 0xFFFF)
-		bond->rr_tx_counter = 0;// if bond->rr_tx_counter overflows, clear it.
+		bond->rr_tx_counter = 0; // if bond->rr_tx_counter overflows, clear it.
 	return NETDEV_TX_OK;
 }
 
